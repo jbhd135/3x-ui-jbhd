@@ -23,6 +23,7 @@ import (
 )
 
 const upstreamFetchTimeout = 20 * time.Second
+const upstreamFetchUserAgent = "Shadowrocket/2026 3x-ui-subscription-market/1.0"
 
 var (
 	ErrSubscriptionURLRequired   = errors.New("subscription URL is required")
@@ -739,7 +740,7 @@ func fetchUpstreamSubscription(rawURL string) (string, upstreamTrafficInfo, erro
 	if err != nil {
 		return "", upstreamTrafficInfo{}, err
 	}
-	req.Header.Set("User-Agent", "3x-ui-subscription-market/1.0")
+	req.Header.Set("User-Agent", upstreamFetchUserAgent)
 	resp, err := client.Do(req)
 	if err != nil {
 		return "", upstreamTrafficInfo{}, err
