@@ -277,6 +277,7 @@ func (a *CustomerSubscriptionPublicController) customerSubscription(c *gin.Conte
 		return
 	}
 
+	setCustomerSubscriptionNoCacheHeaders(c)
 	expire := int64(0)
 	if content.Customer.ExpiryTime > 0 {
 		expire = content.Customer.ExpiryTime / 1000
@@ -360,11 +361,42 @@ func writeCustomerSubscriptionError(c *gin.Context, err error) {
 	switch {
 	case errors.Is(err, service.ErrCustomerNotFound):
 		c.String(http.StatusNotFound, "subscription not found")
-	case errors.Is(err, service.ErrCustomerDisabled), errors.Is(err, service.ErrCustomerExpired):
-		c.String(http.StatusForbidden, err.Error())
+	case errors.Is(err, service.ErrCustomerDisabled),
+		errors.Is(err, service.ErrCustomerExpired),
+		errors.Is(err, service.ErrCustomerNoEnabledNodes),
+		errors.Is(err, service.ErrCustomerNoURIEnabledNodes):
+		writeEmptyCustomerSubscription(c)
 	default:
 		c.String(http.StatusBadRequest, err.Error())
 	}
+}
+
+func writeEmptyCustomerSubscription(c *gin.Context) {
+	setCustomerSubscriptionNoCacheHeaders(c)
+	c.Header("Subscription-Userinfo", "upload=0; download=0; total=0; expire=1")
+	c.Header("Profile-Title", "base64:"+base64.StdEncoding.EncodeToString([]byte("Subscription Expired")))
+
+	if strings.EqualFold(c.Query("format"), "clash") {
+		c.Data(http.StatusOK, "application/yaml; charset=utf-8", []byte(emptyCustomerClashSubscription()))
+		return
+	}
+
+	body := "# subscription expired\n"
+	if wantsPlainCustomerSubscription(c) {
+		c.String(http.StatusOK, body)
+		return
+	}
+	c.String(http.StatusOK, base64.StdEncoding.EncodeToString([]byte(body)))
+}
+
+func emptyCustomerClashSubscription() string {
+	return "proxies: []\nproxy-groups:\n  - name: Proxy\n    type: select\n    proxies: []\nrules:\n  - MATCH,DIRECT\n"
+}
+
+func setCustomerSubscriptionNoCacheHeaders(c *gin.Context) {
+	c.Header("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0")
+	c.Header("Pragma", "no-cache")
+	c.Header("Expires", "0")
 }
 
 func wantsPlainCustomerSubscription(c *gin.Context) bool {
