@@ -19,16 +19,22 @@ func TestRemarkDateDue(t *testing.T) {
 			want:   true,
 		},
 		{
-			name:   "matches YYYYMMDD by month and day",
+			name:   "matches YYYYMMDD in current year",
 			remark: "20260521",
 			now:    time.Date(2026, time.May, 21, 10, 0, 0, 0, time.Local),
 			want:   true,
 		},
 		{
-			name:   "matches either token in compound remark",
+			name:   "keeps future-year YYYYMMDD",
+			remark: "20270520",
+			now:    time.Date(2026, time.May, 21, 10, 0, 0, 0, time.Local),
+			want:   false,
+		},
+		{
+			name:   "keeps compound remark with future dates",
 			remark: "0603.20270501",
 			now:    time.Date(2026, time.May, 1, 10, 0, 0, 0, time.Local),
-			want:   true,
+			want:   false,
 		},
 		{
 			name:   "deletes already expired MMDD",

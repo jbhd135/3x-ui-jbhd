@@ -12,7 +12,7 @@ import (
 var remarkDateTokens = regexp.MustCompile(`\d+`)
 
 // InboundRemarkExpiryJob deletes inbounds whose remark contains an expired
-// MMDD token. An 8-digit YYYYMMDD token is treated as its MMDD portion.
+// MMDD token. An 8-digit YYYYMMDD token is only due in its own year.
 type InboundRemarkExpiryJob struct {
 	inboundService service.InboundService
 	settingService service.SettingService
@@ -76,6 +76,10 @@ func remarkDateDue(remark string, now time.Time) bool {
 		switch len(token) {
 		case 4:
 		case 8:
+			tokenYear, err := strconv.Atoi(token[:4])
+			if err != nil || tokenYear != now.Year() {
+				continue
+			}
 			mmdd = token[4:]
 		default:
 			continue
