@@ -328,6 +328,12 @@ func (s *Server) startTask() {
 	// check inbound-level device limits from access log every 10 sec
 	s.cron.AddJob("@every 10s", job.NewCheckDeviceLimitJob(&s.xrayService))
 
+	// Delete inbounds whose remark date is due. Run once on startup and then
+	// hourly so downtime at midnight does not skip a day.
+	inboundRemarkExpiryJob := job.NewInboundRemarkExpiryJob(&s.xrayService)
+	go inboundRemarkExpiryJob.Run()
+	s.cron.AddJob("@hourly", inboundRemarkExpiryJob)
+
 	// check client ips from log file every day
 	s.cron.AddJob("@daily", job.NewClearLogsJob())
 
