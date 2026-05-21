@@ -11,8 +11,8 @@ import (
 
 var remarkDateTokens = regexp.MustCompile(`\d+`)
 
-// InboundRemarkExpiryJob deletes inbounds whose remark contains today's MMDD
-// token. An 8-digit YYYYMMDD token is treated as its MMDD portion.
+// InboundRemarkExpiryJob deletes inbounds whose remark contains an expired
+// MMDD token. An 8-digit YYYYMMDD token is treated as its MMDD portion.
 type InboundRemarkExpiryJob struct {
 	inboundService service.InboundService
 	settingService service.SettingService
@@ -67,9 +67,9 @@ func remarkDateDue(remark string, now time.Time) bool {
 		return false
 	}
 
-	month := int(now.Month())
-	day := now.Day()
-	lastDay := lastDayOfMonth(now.Year(), now.Month(), now.Location())
+	currentMonth := int(now.Month())
+	currentDay := now.Day()
+	currentLastDay := lastDayOfMonth(now.Year(), now.Month(), now.Location())
 
 	for _, token := range remarkDateTokens.FindAllString(remark, -1) {
 		mmdd := token
@@ -82,7 +82,7 @@ func remarkDateDue(remark string, now time.Time) bool {
 		}
 
 		tokenMonth, err := strconv.Atoi(mmdd[:2])
-		if err != nil || tokenMonth != month {
+		if err != nil || tokenMonth < 1 || tokenMonth > 12 {
 			continue
 		}
 		tokenDay, err := strconv.Atoi(mmdd[2:])
@@ -90,10 +90,18 @@ func remarkDateDue(remark string, now time.Time) bool {
 			continue
 		}
 
-		if day == lastDay {
-			return tokenDay >= day
+		if tokenMonth < currentMonth {
+			return true
 		}
-		if tokenDay == day {
+		if tokenMonth > currentMonth {
+			continue
+		}
+
+		if tokenDay <= currentDay {
+			return true
+		}
+
+		if currentDay == currentLastDay && tokenDay > currentLastDay {
 			return true
 		}
 	}

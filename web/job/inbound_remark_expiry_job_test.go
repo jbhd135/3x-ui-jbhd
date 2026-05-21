@@ -31,8 +31,32 @@ func TestRemarkDateDue(t *testing.T) {
 			want:   true,
 		},
 		{
-			name:   "does not match a different day",
+			name:   "deletes already expired MMDD",
+			remark: "0520",
+			now:    time.Date(2026, time.May, 21, 10, 0, 0, 0, time.Local),
+			want:   true,
+		},
+		{
+			name:   "deletes already expired YYYYMMDD",
+			remark: "20260519",
+			now:    time.Date(2026, time.May, 21, 10, 0, 0, 0, time.Local),
+			want:   true,
+		},
+		{
+			name:   "deletes previous month date",
+			remark: "0431",
+			now:    time.Date(2026, time.May, 21, 10, 0, 0, 0, time.Local),
+			want:   true,
+		},
+		{
+			name:   "keeps future day in current month",
 			remark: "0522",
+			now:    time.Date(2026, time.May, 21, 10, 0, 0, 0, time.Local),
+			want:   false,
+		},
+		{
+			name:   "keeps future month date",
+			remark: "0601",
 			now:    time.Date(2026, time.May, 21, 10, 0, 0, 0, time.Local),
 			want:   false,
 		},
@@ -83,6 +107,18 @@ func TestRemarkDateDue(t *testing.T) {
 			remark: "0431",
 			now:    time.Date(2026, time.April, 30, 10, 0, 0, 0, time.Local),
 			want:   true,
+		},
+		{
+			name:   "June last day catches 0631",
+			remark: "0631",
+			now:    time.Date(2026, time.June, 30, 10, 0, 0, 0, time.Local),
+			want:   true,
+		},
+		{
+			name:   "June before last day keeps 0631",
+			remark: "0631",
+			now:    time.Date(2026, time.June, 29, 10, 0, 0, 0, time.Local),
+			want:   false,
 		},
 		{
 			name:   "rejects invalid month",
