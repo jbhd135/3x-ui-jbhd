@@ -1,9 +1,50 @@
 {{define "modals/inboundModal"}}
-<a-modal id="inbound-modal" v-model="inModal.visible" :title="inModal.title" :dialog-style="{ top: '20px' }"
-    @ok="inModal.ok" :confirm-loading="inModal.confirmLoading" :closable="true" :mask-closable="false"
-    :class="themeSwitcher.currentTheme" :ok-text="inModal.okText" cancel-text='{{ i18n "close" }}'>
+<a-modal id="inbound-modal" v-model="inModal.visible" :dialog-style="{ top: '20px' }" :footer="null"
+    :closable="true" :mask-closable="false" :class="themeSwitcher.currentTheme">
+    <template slot="title">
+        <div class="inbound-modal-titlebar">
+            <span class="inbound-modal-title">[[ inModal.title ]]</span>
+            <a-button class="inbound-modal-top-ok" type="primary" :loading="inModal.confirmLoading"
+                @click.stop="inModal.ok">
+                [[ inModal.okText ]]
+            </a-button>
+        </div>
+    </template>
     {{template "form/inbound" .}}
 </a-modal>
+<style>
+    #inbound-modal .inbound-modal-titlebar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        padding-right: 46px;
+    }
+
+    #inbound-modal .inbound-modal-title {
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+
+    #inbound-modal .inbound-modal-top-ok {
+        min-width: 88px;
+        border-radius: 999px;
+        flex: 0 0 auto;
+    }
+
+    @media (max-width: 768px) {
+        #inbound-modal .inbound-modal-titlebar {
+            padding-right: 38px;
+        }
+
+        #inbound-modal .inbound-modal-top-ok {
+            min-width: 74px;
+            padding: 0 16px;
+        }
+    }
+</style>
 <script>
     // Make inModal globally available to ensure it works with any base path
     const inModal = (window.inModal = {
