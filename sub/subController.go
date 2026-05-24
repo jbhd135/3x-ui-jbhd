@@ -136,6 +136,7 @@ func (a *SUBController) subs(c *gin.Context) {
 			c.HTML(200, "subpage.html", gin.H{
 				"title":        "subscription.title",
 				"cur_ver":      config.GetVersion(),
+				"asset_ver":    config.GetAssetVersion(),
 				"host":         page.Host,
 				"base_path":    page.BasePath,
 				"sId":          page.SId,

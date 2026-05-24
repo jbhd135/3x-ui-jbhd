@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
 )
 
 //go:embed version
@@ -17,6 +18,8 @@ var version string
 
 //go:embed name
 var name string
+
+var assetVersion = fmt.Sprintf("%s-%d", strings.TrimSpace(version), time.Now().Unix())
 
 // LogLevel represents the logging level for the application.
 type LogLevel string
@@ -33,6 +36,11 @@ const (
 // GetVersion returns the version string of the 3x-ui application.
 func GetVersion() string {
 	return strings.TrimSpace(version)
+}
+
+// GetAssetVersion returns a process-scoped cache key for static assets.
+func GetAssetVersion() string {
+	return assetVersion
 }
 
 // GetName returns the name of the 3x-ui application.
