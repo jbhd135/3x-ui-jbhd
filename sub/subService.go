@@ -844,7 +844,11 @@ func (s *SubService) genRemark(inbound *model.Inbound, email string, extra strin
 		orders['e'] = email
 	}
 	if len(inbound.Remark) > 0 {
-		orders['i'] = s.clientVisibleInboundRemark(inbound.Remark)
+		visibleRemark, isExpiryRemark := s.clientVisibleInboundRemark(inbound.Remark)
+		orders['i'] = visibleRemark
+		if isExpiryRemark {
+			orders['e'] = ""
+		}
 	}
 	if len(extra) > 0 {
 		orders['o'] = extra

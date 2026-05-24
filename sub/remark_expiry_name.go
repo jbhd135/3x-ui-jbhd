@@ -10,15 +10,20 @@ import (
 
 var clientRemarkDateTokens = regexp.MustCompile(`\d+`)
 
-func (s *SubService) clientVisibleInboundRemark(remark string) string {
+func (s *SubService) clientVisibleInboundRemark(remark string) (string, bool) {
 	if formatted, ok := formatClientExpiryRemark(remark, s.remarkDateNow()); ok {
-		return formatted
+		return formatted, true
 	}
-	return remark
+	return remark, false
 }
 
-func (s *SubService) remarkDateNow() time.Time {
-	now := time.Now()
+func (s *SubService) remarkDateNow() (now time.Time) {
+	now = time.Now()
+	defer func() {
+		if recover() != nil {
+			now = time.Now()
+		}
+	}()
 	if loc, err := s.settingService.GetTimeLocation(); err == nil && loc != nil {
 		return now.In(loc)
 	}

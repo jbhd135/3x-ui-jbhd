@@ -1,8 +1,11 @@
 package sub
 
 import (
+	"fmt"
 	"testing"
 	"time"
+
+	"github.com/mhsanaei/3x-ui/v2/database/model"
 )
 
 func TestFormatClientExpiryRemark(t *testing.T) {
@@ -68,5 +71,16 @@ func TestFormatClientExpiryRemark(t *testing.T) {
 				t.Fatalf("formatClientExpiryRemark(%q) = %q, %v; want %q, %v", tt.remark, got, ok, tt.want, tt.ok)
 			}
 		})
+	}
+}
+
+func TestGenRemarkHidesClientEmailForExpiryRemark(t *testing.T) {
+	service := &SubService{remarkModel: "-ieo"}
+	inbound := &model.Inbound{Remark: "0615"}
+
+	got := service.genRemark(inbound, "ayd3o269", "")
+	want := fmt.Sprintf("过期日期:%d年6月15日", time.Now().Year())
+	if got != want {
+		t.Fatalf("genRemark() = %q, want %q", got, want)
 	}
 }

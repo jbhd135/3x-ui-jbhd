@@ -2305,9 +2305,11 @@ class Inbound extends XrayCommonClass {
         let port = this.port;
         const separationChar = remarkModel.charAt(0);
         const orderChars = remarkModel.slice(1);
+        const visibleRemark = formatClientExpiryRemark(remark);
+        const isExpiryRemark = visibleRemark !== `${remark || ''}`.trim();
         let orders = {
-            'i': formatClientExpiryRemark(remark),
-            'e': email,
+            'i': visibleRemark,
+            'e': isExpiryRemark ? '' : email,
             'o': '',
         };
         if (ObjectUtil.isArrEmpty(this.stream.externalProxy)) {
