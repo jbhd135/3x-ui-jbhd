@@ -31,6 +31,18 @@ func TestRemarkDateDue(t *testing.T) {
 			want:   false,
 		},
 		{
+			name:   "keeps future-year YYMMDD",
+			remark: "270520",
+			now:    time.Date(2026, time.May, 21, 10, 0, 0, 0, time.Local),
+			want:   false,
+		},
+		{
+			name:   "matches YYMMDD in current year",
+			remark: "260521",
+			now:    time.Date(2026, time.May, 21, 10, 0, 0, 0, time.Local),
+			want:   true,
+		},
+		{
 			name:   "keeps compound remark with future dates",
 			remark: "0603.20270501",
 			now:    time.Date(2026, time.May, 1, 10, 0, 0, 0, time.Local),

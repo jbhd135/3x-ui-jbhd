@@ -75,6 +75,12 @@ func remarkDateDue(remark string, now time.Time) bool {
 		mmdd := token
 		switch len(token) {
 		case 4:
+		case 6:
+			tokenYear, err := strconv.Atoi(token[:2])
+			if err != nil || 2000+tokenYear != now.Year() {
+				continue
+			}
+			mmdd = token[2:]
 		case 8:
 			tokenYear, err := strconv.Atoi(token[:4])
 			if err != nil || tokenYear != now.Year() {

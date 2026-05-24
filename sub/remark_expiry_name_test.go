@@ -26,6 +26,12 @@ func TestFormatClientExpiryRemark(t *testing.T) {
 			ok:     true,
 		},
 		{
+			name:   "formats short year YYMMDD",
+			remark: "270524",
+			want:   "过期日期:2027年5月24日",
+			ok:     true,
+		},
+		{
 			name:   "clamps invalid month day",
 			remark: "0631",
 			want:   "过期日期:2026年6月30日",

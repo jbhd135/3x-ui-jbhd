@@ -146,6 +146,9 @@ function formatClientExpiryRemark(remark) {
             year = Number(token.slice(0, 4));
             if (!Number.isInteger(year) || year < 2000 || year > 2099) continue;
             mmdd = token.slice(4);
+        } else if (token.length === 6) {
+            year = 2000 + Number(token.slice(0, 2));
+            mmdd = token.slice(2);
         } else if (token.length !== 4) {
             continue;
         }

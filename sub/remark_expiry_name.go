@@ -63,6 +63,13 @@ func parseClientRemarkDateToken(token string, now time.Time) (time.Time, bool) {
 	mmdd := token
 	switch len(token) {
 	case 4:
+	case 6:
+		parsedYear, err := strconv.Atoi(token[:2])
+		if err != nil {
+			return time.Time{}, false
+		}
+		year = 2000 + parsedYear
+		mmdd = token[2:]
 	case 8:
 		parsedYear, err := strconv.Atoi(token[:4])
 		if err != nil || parsedYear < 2000 || parsedYear > 2099 {
