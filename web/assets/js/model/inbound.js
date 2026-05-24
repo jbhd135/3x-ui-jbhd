@@ -131,6 +131,43 @@ Object.freeze(TCP_CONGESTION_OPTION);
 Object.freeze(USERS_SECURITY);
 Object.freeze(MODE_OPTION);
 
+function formatClientExpiryRemark(remark) {
+    remark = `${remark || ''}`.trim();
+    if (!remark) return remark;
+
+    const now = new Date();
+    const currentYear = now.getFullYear();
+    const tokens = remark.match(/\d+/g) || [];
+    let earliest = null;
+    for (const token of tokens) {
+        let year = currentYear;
+        let mmdd = token;
+        if (token.length === 8) {
+            year = Number(token.slice(0, 4));
+            if (!Number.isInteger(year) || year < 2000 || year > 2099) continue;
+            mmdd = token.slice(4);
+        } else if (token.length !== 4) {
+            continue;
+        }
+
+        const month = Number(mmdd.slice(0, 2));
+        let day = Number(mmdd.slice(2));
+        if (!Number.isInteger(month) || month < 1 || month > 12) continue;
+        if (!Number.isInteger(day) || day < 1 || day > 31) continue;
+
+        const lastDay = new Date(year, month, 0).getDate();
+        if (day > lastDay) day = lastDay;
+
+        const date = new Date(year, month - 1, day);
+        if (!earliest || date < earliest.date) {
+            earliest = { date, year, month, day };
+        }
+    }
+
+    if (!earliest) return remark;
+    return `过期日期:${earliest.year}年${earliest.month}月${earliest.day}日`;
+}
+
 class XrayCommonClass {
 
     static toJsonArray(arr) {
@@ -2223,6 +2260,7 @@ class Inbound extends XrayCommonClass {
     genWireguardLinks(remark = '', remarkModel = '-ieo') {
         const addr = !ObjectUtil.isEmpty(this.listen) && this.listen !== "0.0.0.0" ? this.listen : location.hostname;
         const separationChar = remarkModel.charAt(0);
+        remark = formatClientExpiryRemark(remark);
         let links = [];
         this.settings.peers.forEach((p, index) => {
             links.push(this.getWireguardLink(addr, this.port, remark + separationChar + (index + 1), index));
@@ -2233,6 +2271,7 @@ class Inbound extends XrayCommonClass {
     genWireguardConfigs(remark = '', remarkModel = '-ieo') {
         const addr = !ObjectUtil.isEmpty(this.listen) && this.listen !== "0.0.0.0" ? this.listen : location.hostname;
         const separationChar = remarkModel.charAt(0);
+        remark = formatClientExpiryRemark(remark);
         let links = [];
         this.settings.peers.forEach((p, index) => {
             links.push(this.getWireguardTxt(addr, this.port, remark + separationChar + (index + 1), index));
@@ -2264,7 +2303,7 @@ class Inbound extends XrayCommonClass {
         const separationChar = remarkModel.charAt(0);
         const orderChars = remarkModel.slice(1);
         let orders = {
-            'i': remark,
+            'i': formatClientExpiryRemark(remark),
             'e': email,
             'o': '',
         };
