@@ -244,16 +244,11 @@ func applyInboundSocksProxy(xrayConfig *xray.Config, inbound *model.Inbound) err
 			return err
 		}
 	}
-	rule := map[string]any{
-		"type":        "field",
-		"inboundTag":  []string{inbound.Tag},
-		"outboundTag": outboundTag,
-	}
 	var rules []any
 	if existing, ok := routing["rules"].([]any); ok {
 		rules = existing
 	}
-	routing["rules"] = prependAfterAPIRule(rules, rule)
+	routing["rules"] = prependAfterAPIRule(rules, buildSocksProxyRoutingRules(inbound.Tag, outboundTag)...)
 	routingBytes, err := json.MarshalIndent(routing, "", "  ")
 	if err != nil {
 		return err
@@ -280,6 +275,28 @@ func buildSocksProxyServer(inbound *model.Inbound) map[string]any {
 	return server
 }
 
+func buildSocksProxyRoutingRules(inboundTag string, socksOutboundTag string) []map[string]any {
+	return []map[string]any{
+		{
+			"type":        "field",
+			"inboundTag":  []string{inboundTag},
+			"domain":      []string{"geosite:cn"},
+			"outboundTag": "direct",
+		},
+		{
+			"type":        "field",
+			"inboundTag":  []string{inboundTag},
+			"ip":          []string{"geoip:cn", "geoip:private"},
+			"outboundTag": "direct",
+		},
+		{
+			"type":        "field",
+			"inboundTag":  []string{inboundTag},
+			"outboundTag": socksOutboundTag,
+		},
+	}
+}
+
 func inboundSocksProxyTag(inbound *model.Inbound) string {
 	if inbound.Id > 0 {
 		return "xui-socks-inbound-" + strconv.Itoa(inbound.Id)
@@ -287,16 +304,21 @@ func inboundSocksProxyTag(inbound *model.Inbound) string {
 	return "xui-socks-" + inbound.Tag
 }
 
-func prependAfterAPIRule(rules []any, rule map[string]any) []any {
-	newRules := make([]any, 0, len(rules)+1)
+func prependAfterAPIRule(rules []any, insertedRules ...map[string]any) []any {
+	newRules := make([]any, 0, len(rules)+len(insertedRules))
+	for _, rule := range insertedRules {
+		if rule != nil {
+			newRules = append(newRules, rule)
+		}
+	}
 	if len(rules) == 0 {
-		return append(newRules, rule)
+		return newRules
 	}
 	if isAPIRoutingRule(rules[0]) {
-		newRules = append(newRules, rules[0], rule)
+		apiRule := rules[0]
+		newRules = append([]any{apiRule}, newRules...)
 		return append(newRules, rules[1:]...)
 	}
-	newRules = append(newRules, rule)
 	return append(newRules, rules...)
 }
 

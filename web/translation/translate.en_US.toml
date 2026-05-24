@@ -275,7 +275,7 @@
 "deviceLimit" = "Device Limit"
 "deviceLimitDesc" = "Maximum active devices/IPs allowed for this inbound. 0 means unlimited."
 "socksProxy" = "SOCKS5 Static Outbound"
-"socksProxyDesc" = "Route all traffic from this inbound through a dedicated SOCKS5 proxy outbound."
+"socksProxyDesc" = "Route non-China traffic from this inbound through a dedicated SOCKS5 proxy outbound; China traffic goes direct."
 "socksProxyHost" = "SOCKS5 Address"
 "socksProxyPort" = "SOCKS5 Port"
 "socksProxyUsername" = "SOCKS5 Username"

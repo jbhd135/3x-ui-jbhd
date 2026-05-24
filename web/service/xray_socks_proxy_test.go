@@ -59,14 +59,29 @@ func TestApplyInboundSocksProxyAddsOutboundAndRouting(t *testing.T) {
 		t.Fatalf("unmarshal routing: %v", err)
 	}
 	rules := routing["rules"].([]any)
-	if len(rules) != 3 {
-		t.Fatalf("len(rules) = %d, want 3", len(rules))
+	if len(rules) != 5 {
+		t.Fatalf("len(rules) = %d, want 5", len(rules))
 	}
-	gotRule := rules[1].(map[string]any)
-	if gotRule["outboundTag"] != "xui-socks-inbound-42" {
-		t.Fatalf("socks rule outboundTag = %v", gotRule["outboundTag"])
+	gotDomainRule := rules[1].(map[string]any)
+	if gotDomainRule["outboundTag"] != "direct" {
+		t.Fatalf("domain bypass rule outboundTag = %v", gotDomainRule["outboundTag"])
 	}
-	inboundTags := gotRule["inboundTag"].([]any)
+	if domains := gotDomainRule["domain"].([]any); len(domains) != 1 || domains[0] != "geosite:cn" {
+		t.Fatalf("domain bypass rule domain = %#v", gotDomainRule["domain"])
+	}
+	gotIPRule := rules[2].(map[string]any)
+	if gotIPRule["outboundTag"] != "direct" {
+		t.Fatalf("ip bypass rule outboundTag = %v", gotIPRule["outboundTag"])
+	}
+	ips := gotIPRule["ip"].([]any)
+	if len(ips) != 2 || ips[0] != "geoip:cn" || ips[1] != "geoip:private" {
+		t.Fatalf("ip bypass rule ip = %#v", gotIPRule["ip"])
+	}
+	gotSocksRule := rules[3].(map[string]any)
+	if gotSocksRule["outboundTag"] != "xui-socks-inbound-42" {
+		t.Fatalf("socks rule outboundTag = %v", gotSocksRule["outboundTag"])
+	}
+	inboundTags := gotSocksRule["inboundTag"].([]any)
 	if len(inboundTags) != 1 || inboundTags[0] != "inbound-443" {
 		t.Fatalf("socks rule inboundTag = %#v", inboundTags)
 	}

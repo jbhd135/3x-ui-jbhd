@@ -275,7 +275,7 @@
 "deviceLimit" = "设备限制"
 "deviceLimitDesc" = "允许同时活跃的设备/IP 数量，0 表示不限制"
 "socksProxy" = "SOCKS5 静态出口"
-"socksProxyDesc" = "将此入站的全部流量转发到单独的 SOCKS5 静态出口"
+"socksProxyDesc" = "将此入站的海外流量转发到单独的 SOCKS5 静态出口，国内流量直连"
 "socksProxyHost" = "SOCKS5 地址"
 "socksProxyPort" = "SOCKS5 端口"
 "socksProxyUsername" = "SOCKS5 用户名"
