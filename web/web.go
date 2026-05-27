@@ -299,6 +299,12 @@ func (s *Server) initRouter() (*gin.Engine, error) {
 // jobs) which the panel relies on for periodic maintenance and monitoring.
 func (s *Server) startTask() {
 	s.customGeoService.EnsureOnStartup()
+	subscriptionMarket := service.SubscriptionMarketService{}
+	if changed, err := subscriptionMarket.SyncCustomerRelay(); err != nil {
+		logger.Warning("sync customer relay failed:", err)
+	} else if changed {
+		logger.Info("customer relay synced")
+	}
 	err := s.xrayService.RestartXray(true)
 	if err != nil {
 		logger.Warning("start xray failed:", err)
