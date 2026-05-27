@@ -428,7 +428,42 @@ func inboundUpstreamRelayRows(db *gorm.DB) ([]customerRelayRow, error) {
 func ensureCustomerRelayInbound(tx *gorm.DB) (*model.Inbound, bool, error) {
 	inbound, err := getCustomerRelayInbound(tx)
 	if err == nil {
-		return inbound, false, nil
+		changed := false
+		if inbound.Protocol != model.VMESS {
+			inbound.Protocol = model.VMESS
+			changed = true
+		}
+		if !inbound.Enable {
+			inbound.Enable = true
+			changed = true
+		}
+		if inbound.Port <= 0 {
+			port, err := findCustomerRelayPort(tx)
+			if err != nil {
+				return nil, false, err
+			}
+			inbound.Port = port
+			changed = true
+		}
+		if strings.TrimSpace(inbound.Tag) == "" {
+			inbound.Tag = fmt.Sprintf("inbound-%d", inbound.Port)
+			changed = true
+		}
+		streamSettings := defaultCustomerRelayStreamSettings()
+		if strings.TrimSpace(inbound.StreamSettings) != strings.TrimSpace(streamSettings) {
+			inbound.StreamSettings = streamSettings
+			changed = true
+		}
+		if strings.TrimSpace(inbound.Sniffing) == "" {
+			inbound.Sniffing = `{"enabled":true,"destOverride":["http","tls","quic"],"metadataOnly":false,"routeOnly":false}`
+			changed = true
+		}
+		if changed {
+			if err := tx.Save(inbound).Error; err != nil {
+				return nil, false, err
+			}
+		}
+		return inbound, changed, nil
 	}
 	if !errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, false, err
@@ -525,13 +560,13 @@ func defaultCustomerRelayStreamSettings() string {
 					"version": "1.1",
 					"method":  "GET",
 					"path":    []string{"/"},
-					"headers": []any{},
+					"headers": map[string]any{},
 				},
 				"response": map[string]any{
 					"version": "1.1",
 					"status":  "200",
 					"reason":  "OK",
-					"headers": []any{},
+					"headers": map[string]any{},
 				},
 			},
 		},
