@@ -922,14 +922,8 @@ func uriProtocol(link string) string {
 
 func subscriptionURIName(link string) string {
 	if strings.HasPrefix(strings.ToLower(link), "vmess://") {
-		payload := strings.TrimSpace(link[len("vmess://"):])
-		if decoded, ok := decodeBase64Any(payload); ok {
-			var data map[string]any
-			if err := json.Unmarshal([]byte(decoded), &data); err == nil {
-				if name, _ := data["ps"].(string); strings.TrimSpace(name) != "" {
-					return strings.TrimSpace(name)
-				}
-			}
+		if name := vmessURIName(link); name != "" {
+			return name
 		}
 	}
 	u, err := url.Parse(link)
@@ -949,6 +943,62 @@ func subscriptionURIName(link string) string {
 		protocol = "node"
 	}
 	return strings.ToUpper(protocol) + " node"
+}
+
+func vmessURIName(link string) string {
+	payload := strings.TrimSpace(link[len("vmess://"):])
+	if basePayload, rest, ok := strings.Cut(payload, "?"); ok {
+		payload = basePayload
+		queryText, fragment, _ := strings.Cut(rest, "#")
+		if name := subscriptionQueryName(queryText); name != "" {
+			return name
+		}
+		if name := unescapeSubscriptionName(fragment); name != "" {
+			return name
+		}
+	} else if basePayload, fragment, ok := strings.Cut(payload, "#"); ok {
+		payload = basePayload
+		if name := unescapeSubscriptionName(fragment); name != "" {
+			return name
+		}
+	}
+	if decoded, ok := decodeBase64Any(payload); ok {
+		if strings.HasPrefix(strings.TrimSpace(decoded), "{") {
+			var data map[string]any
+			if err := json.Unmarshal([]byte(decoded), &data); err == nil {
+				if name, _ := data["ps"].(string); strings.TrimSpace(name) != "" {
+					return strings.TrimSpace(name)
+				}
+			}
+		} else if _, address, ok := strings.Cut(strings.TrimSpace(decoded), "@"); ok {
+			return strings.TrimSpace(address)
+		}
+	}
+	return ""
+}
+
+func subscriptionQueryName(queryText string) string {
+	query, err := url.ParseQuery(queryText)
+	if err != nil {
+		return ""
+	}
+	for _, key := range []string{"remarks", "remark", "ps", "name"} {
+		if name := unescapeSubscriptionName(query.Get(key)); name != "" {
+			return name
+		}
+	}
+	return ""
+}
+
+func unescapeSubscriptionName(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	if decoded, err := url.QueryUnescape(value); err == nil {
+		value = decoded
+	}
+	return strings.TrimSpace(value)
 }
 
 func decodeBase64Any(content string) (string, bool) {
