@@ -727,23 +727,9 @@ func buildUpstreamURIOutbound(tag string, link string) (map[string]any, error) {
 
 func buildVmessOutboundFromURI(tag string, link string) (map[string]any, error) {
 	payload := strings.TrimSpace(strings.TrimPrefix(link, "vmess://"))
-	query := url.Values{}
-	if basePayload, rest, ok := strings.Cut(payload, "?"); ok {
-		payload = basePayload
-		if queryText, _, _ := strings.Cut(rest, "#"); strings.TrimSpace(queryText) != "" {
-			if parsedQuery, err := url.ParseQuery(queryText); err == nil {
-				query = parsedQuery
-			}
-		}
-	} else if basePayload, _, ok := strings.Cut(payload, "#"); ok {
-		payload = basePayload
-	}
 	decoded, ok := decodeBase64Any(payload)
 	if !ok {
 		return nil, fmt.Errorf("invalid vmess payload")
-	}
-	if !strings.HasPrefix(strings.TrimSpace(decoded), "{") {
-		return buildLegacyVmessOutbound(tag, decoded, query)
 	}
 	var data map[string]any
 	if err := json.Unmarshal([]byte(decoded), &data); err != nil {
@@ -779,68 +765,6 @@ func buildVmessOutboundFromURI(tag string, link string) (map[string]any, error) 
 		},
 		"streamSettings": streamSettingsFromVMess(data),
 	}, nil
-}
-
-func buildLegacyVmessOutbound(tag string, decoded string, query url.Values) (map[string]any, error) {
-	userInfo, address, ok := strings.Cut(strings.TrimSpace(decoded), "@")
-	if !ok {
-		return nil, fmt.Errorf("legacy vmess node misses user or address")
-	}
-	security := "auto"
-	uuid := strings.TrimSpace(userInfo)
-	if left, right, ok := strings.Cut(userInfo, ":"); ok {
-		security = strings.TrimSpace(left)
-		uuid = strings.TrimSpace(right)
-	}
-	host, port, err := splitHostPortLoose(address)
-	if err != nil {
-		return nil, err
-	}
-	if host == "" || port <= 0 || uuid == "" {
-		return nil, fmt.Errorf("legacy vmess node misses host, port, or uuid")
-	}
-	return map[string]any{
-		"tag":      tag,
-		"protocol": "vmess",
-		"settings": map[string]any{
-			"vnext": []any{
-				map[string]any{
-					"address": host,
-					"port":    port,
-					"users": []any{
-						map[string]any{
-							"id":       uuid,
-							"alterId":  intValue(query.Get("alterId")),
-							"security": firstNonEmpty(security, "auto"),
-						},
-					},
-				},
-			},
-		},
-		"streamSettings": streamSettingsFromLegacyVmessQuery(query),
-	}, nil
-}
-
-func streamSettingsFromLegacyVmessQuery(query url.Values) map[string]any {
-	q := url.Values{}
-	for key, values := range query {
-		for _, value := range values {
-			q.Add(key, value)
-		}
-	}
-	legacyHeaderType := q.Get("type")
-	if network := firstNonEmpty(q.Get("net"), q.Get("network")); network != "" {
-		q.Set("type", network)
-	} else {
-		q.Set("type", "tcp")
-	}
-	if q.Get("security") == "" {
-		q.Set("security", securityFromVMess(q.Get("tls")))
-	}
-	if q.Get("headerType") == "" && legacyHeaderType != "" && legacyHeaderType != "tcp" {
-		q.Set("headerType", legacyHeaderType)
-	}
-	return streamSettingsFromURL(q)
 }
 
 func buildVLESSOutboundFromURI(tag string, link string) (map[string]any, error) {
