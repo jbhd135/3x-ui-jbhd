@@ -100,8 +100,21 @@
     :class="themeSwitcher.currentTheme" width="980px">
     <a-alert type="info" show-icon message="关闭的节点不会出现在客户添加页，也不会输出到客户订阅或入站订阅。"
       class="mb-10"></a-alert>
+    <div v-if="nodeModal.nodes.length" class="node-country-toolbar">
+      <div class="node-country-title">按国家快速启用</div>
+      <a-checkbox :checked="allNodeGroupsChecked" :indeterminate="allNodeGroupsIndeterminate"
+        :disabled="nodeModal.bulkSaving" @change="e => bulkToggleNodes(nodeModal.nodes, e.target.checked)">
+        全选 ([[ enabledNodeCount ]]/[[ nodeModal.nodes.length ]])
+      </a-checkbox>
+      <a-divider type="vertical"></a-divider>
+      <a-checkbox v-for="group in nodeCountryGroups" :key="group.key" :checked="group.checked"
+        :indeterminate="group.indeterminate" :disabled="nodeModal.bulkSaving"
+        @change="e => bulkToggleNodes(group.nodes, e.target.checked)">
+        [[ group.label ]] ([[ group.enabledCount ]]/[[ group.total ]])
+      </a-checkbox>
+    </div>
     <a-table row-key="id" :columns="nodeColumns" :data-source="nodeModal.nodes" :pagination="false" size="middle"
-      :scroll="{ x: 900, y: 520 }">
+      :loading="nodeModal.bulkSaving" :scroll="{ x: 900, y: 520 }">
       <template slot="enable" slot-scope="text, record">
         <a-switch :checked="record.enable" @change="checked => toggleNode(record, checked)"></a-switch>
       </template>
@@ -122,6 +135,118 @@
 {{template "component/aSidebar" .}}
 {{template "component/aThemeSwitch" .}}
 <script>
+  const COUNTRY_CODE_LABELS = {
+    HK: '香港',
+    TW: '台湾',
+    SG: '新加坡',
+    US: '美国',
+    JP: '日本',
+    KR: '韩国',
+    GB: '英国',
+    UK: '英国',
+    DE: '德国',
+    FR: '法国',
+    NL: '荷兰',
+    CA: '加拿大',
+    AU: '澳大利亚',
+    NZ: '新西兰',
+    TH: '泰国',
+    VN: '越南',
+    MY: '马来西亚',
+    ID: '印度尼西亚',
+    PH: '菲律宾',
+    IN: '印度',
+    MO: '澳门',
+    RU: '俄罗斯',
+    TR: '土耳其',
+    BR: '巴西',
+    AR: '阿根廷',
+    ZA: '南非',
+    CH: '瑞士',
+    SE: '瑞典',
+    FI: '芬兰',
+    NO: '挪威',
+    DK: '丹麦',
+    ES: '西班牙',
+    IT: '意大利',
+    PL: '波兰',
+    UA: '乌克兰',
+    AE: '阿联酋',
+    IL: '以色列',
+  };
+
+  const COUNTRY_NAME_MATCHES = [{
+      key: 'HK',
+      label: '香港',
+      tokens: ['香港', 'Hong Kong', 'HK']
+    },
+    {
+      key: 'TW',
+      label: '台湾',
+      tokens: ['台湾', 'Taiwan', 'TW']
+    },
+    {
+      key: 'SG',
+      label: '新加坡',
+      tokens: ['新加坡', 'Singapore', 'SG']
+    },
+    {
+      key: 'US',
+      label: '美国',
+      tokens: ['美国', '美國', 'United States', 'USA', 'US']
+    },
+    {
+      key: 'JP',
+      label: '日本',
+      tokens: ['日本', 'Japan', 'JP']
+    },
+    {
+      key: 'KR',
+      label: '韩国',
+      tokens: ['韩国', '韓國', 'Korea', 'KR']
+    },
+    {
+      key: 'GB',
+      label: '英国',
+      tokens: ['英国', '英國', 'United Kingdom', 'UK', 'GB']
+    },
+    {
+      key: 'DE',
+      label: '德国',
+      tokens: ['德国', '德國', 'Germany', 'DE']
+    },
+    {
+      key: 'FR',
+      label: '法国',
+      tokens: ['法国', '法國', 'France', 'FR']
+    },
+    {
+      key: 'NL',
+      label: '荷兰',
+      tokens: ['荷兰', '荷蘭', 'Netherlands', 'NL']
+    },
+    {
+      key: 'CA',
+      label: '加拿大',
+      tokens: ['加拿大', 'Canada', 'CA']
+    },
+    {
+      key: 'AU',
+      label: '澳大利亚',
+      tokens: ['澳大利亚', '澳洲', 'Australia', 'AU']
+    },
+    {
+      key: 'NZ',
+      label: '新西兰',
+      tokens: ['新西兰', '紐西蘭', 'New Zealand', 'NZ']
+    },
+    {
+      key: 'OTHER',
+      label: '其他',
+      tokens: []
+    },
+  ];
+
   const upstreamColumns = [{
       title: '名称',
       dataIndex: 'name',
@@ -239,6 +364,47 @@
         upstreamId: null,
         upstreamName: '',
         nodes: [],
+        bulkSaving: false,
+      },
+    },
+    computed: {
+      enabledNodeCount() {
+        return this.nodeModal.nodes.filter(node => !!node.enable).length;
+      },
+      allNodeGroupsChecked() {
+        return this.nodeModal.nodes.length > 0 && this.enabledNodeCount === this.nodeModal.nodes.length;
+      },
+      allNodeGroupsIndeterminate() {
+        return this.enabledNodeCount > 0 && this.enabledNodeCount < this.nodeModal.nodes.length;
+      },
+      nodeCountryGroups() {
+        const groups = {};
+        this.nodeModal.nodes.forEach(node => {
+          const country = this.nodeCountryInfo(node.name);
+          if (!groups[country.key]) {
+            groups[country.key] = {
+              key: country.key,
+              label: country.label,
+              nodes: [],
+              total: 0,
+              enabledCount: 0,
+              checked: false,
+              indeterminate: false,
+            };
+          }
+          groups[country.key].nodes.push(node);
+        });
+        return Object.values(groups).map(group => {
+          group.total = group.nodes.length;
+          group.enabledCount = group.nodes.filter(node => !!node.enable).length;
+          group.checked = group.total > 0 && group.enabledCount === group.total;
+          group.indeterminate = group.enabledCount > 0 && group.enabledCount < group.total;
+          return group;
+        }).sort((a, b) => {
+          if (a.key === 'OTHER') return 1;
+          if (b.key === 'OTHER') return -1;
+          return a.label.localeCompare(b.label, 'zh-CN');
+        });
       },
     },
     methods: {
@@ -280,6 +446,51 @@
         this.nodeModal.upstreamName = record.name;
         this.nodeModal.nodes = Array.isArray(record.nodes) ? record.nodes : [];
         this.nodeModal.visible = true;
+      },
+      nodeCountryInfo(name) {
+        const text = String(name || '');
+        const flagMatch = text.match(/[\u{1F1E6}-\u{1F1FF}]{2}/u);
+        if (flagMatch) {
+          const flag = flagMatch[0];
+          const code = this.flagToCountryCode(flag);
+          const label = COUNTRY_CODE_LABELS[code] || code || '其他';
+          return {
+            key: code || flag,
+            label: label === '其他' ? `${flag} 其他` : `${flag} ${label}`,
+          };
+        }
+        const matched = COUNTRY_NAME_MATCHES.find(item => {
+          if (item.key === 'OTHER') return false;
+          return item.tokens.some(token => this.nodeNameMatchesToken(text, token));
+        });
+        if (matched) {
+          return {
+            key: matched.key,
+            label: matched.label,
+          };
+        }
+        return {
+          key: 'OTHER',
+          label: '其他',
+        };
+      },
+      flagToCountryCode(flag) {
+        const code = Array.from(flag).map(char => {
+          const point = char.codePointAt(0);
+          if (!point || point < 0x1F1E6 || point > 0x1F1FF) return '';
+          return String.fromCharCode(point - 0x1F1E6 + 65);
+        }).join('');
+        return code === 'UK' ? 'GB' : code;
+      },
+      nodeNameMatchesToken(text, token) {
+        const upperText = String(text || '').toUpperCase();
+        const upperToken = String(token || '').toUpperCase();
+        if (!upperToken) return false;
+        if (/^[A-Z]{2}$/.test(upperToken)) {
+          const pattern = new RegExp(`(^|[^A-Z])${upperToken}([^A-Z]|$)`);
+          return pattern.test(upperText);
+        }
+        return upperText.includes(upperToken);
       },
       async submitUpstream() {
         const form = this.upstreamModal.form;
@@ -330,6 +541,31 @@
         });
         if (!msg.success) {
           record.enable = previous;
+        }
+      },
+      async bulkToggleNodes(nodes, checked) {
+        const list = Array.isArray(nodes) ? nodes : [];
+        const nodeIds = list.map(node => Number(node.id || 0)).filter(id => id > 0);
+        if (nodeIds.length === 0) return;
+        const previous = new Map(list.map(node => [node.id, node.enable]));
+        list.forEach(node => {
+          node.enable = checked;
+        });
+        this.nodeModal.bulkSaving = true;
+        try {
+          const msg = await HttpUtil.post('/panel/api/subscription-market/nodes/bulk-toggle', {
+            nodeIds,
+            enable: checked,
+          });
+          if (!msg.success) {
+            list.forEach(node => {
+              if (previous.has(node.id)) node.enable = previous.get(node.id);
+            });
+            return;
+          }
+          await this.loadAll();
+        } finally {
+          this.nodeModal.bulkSaving = false;
         }
       },
       async copyNodeLink(record) {
@@ -400,6 +636,23 @@
   });
 </script>
 <style>
+  .node-country-toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px 12px;
+    padding: 10px 12px;
+    margin-bottom: 10px;
+    border: 1px solid rgba(80, 112, 160, 0.35);
+    border-radius: 8px;
+  }
+
+  .node-country-title {
+    margin-right: 4px;
+    font-weight: 600;
+    white-space: nowrap;
+  }
+
   .error-tag {
     max-width: 120px;
     overflow: hidden;

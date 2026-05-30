@@ -46,6 +46,7 @@ func (a *SubscriptionMarketAPIController) initRouter(g *gin.RouterGroup) {
 	nodes := g.Group("/nodes")
 	nodes.GET("/list", a.listNodes)
 	nodes.POST("/toggle/:id", a.toggleNode)
+	nodes.POST("/bulk-toggle", a.bulkToggleNodes)
 
 	customers := g.Group("/customers")
 	customers.GET("/list", a.listCustomers)
@@ -71,6 +72,11 @@ type upstreamSubscriptionForm struct {
 
 type toggleForm struct {
 	Enable bool `json:"enable" form:"enable"`
+}
+
+type nodeBulkToggleForm struct {
+	NodeIds []int `json:"nodeIds" form:"nodeIds"`
+	Enable  bool  `json:"enable" form:"enable"`
 }
 
 type customerSubscriptionForm struct {
@@ -181,6 +187,16 @@ func (a *SubscriptionMarketAPIController) toggleNode(c *gin.Context) {
 	}
 	err := a.subscriptionMarket.SetNodeEnable(id, form.Enable)
 	jsonMsg(c, "toggle upstream node", err)
+}
+
+func (a *SubscriptionMarketAPIController) bulkToggleNodes(c *gin.Context) {
+	var form nodeBulkToggleForm
+	if err := c.ShouldBind(&form); err != nil {
+		jsonMsg(c, "bulk toggle upstream nodes", err)
+		return
+	}
+	err := a.subscriptionMarket.SetNodesEnable(form.NodeIds, form.Enable)
+	jsonMsg(c, "bulk toggle upstream nodes", err)
 }
 
 func (a *SubscriptionMarketAPIController) listCustomers(c *gin.Context) {

@@ -205,6 +205,21 @@ func (s *SubscriptionMarketService) SetNodeEnable(id int, enable bool) error {
 	return nil
 }
 
+func (s *SubscriptionMarketService) SetNodesEnable(ids []int, enable bool) error {
+	ids = uniquePositiveInts(ids)
+	if len(ids) == 0 {
+		return nil
+	}
+	result := database.GetDB().Model(&model.UpstreamNode{}).Where("id IN ?", ids).Update("enable", enable)
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected == 0 {
+		return ErrSubscriptionNotFound
+	}
+	return nil
+}
+
 func (s *SubscriptionMarketService) SyncUpstream(id int) (*model.UpstreamSubscription, error) {
 	db := database.GetDB()
 	var upstream model.UpstreamSubscription
