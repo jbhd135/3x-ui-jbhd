@@ -79,6 +79,14 @@ type InboundSubscriptionContent struct {
 	ClashProxy []map[string]any
 }
 
+type upstreamNodeContentRow struct {
+	ID             int
+	UpstreamSortID int
+	Sort           int
+	Link           string
+	Clash          string
+}
+
 type parsedUpstreamNode struct {
 	Name       string
 	Protocol   string
@@ -571,6 +579,51 @@ func (s *SubscriptionMarketService) customerNodeIDs(customerID int) ([]int, erro
 		Order("node_id asc").
 		Pluck("node_id", &ids).Error
 	return ids, err
+}
+
+func (s *SubscriptionMarketService) inboundIDsBySubID(subID string) ([]int, error) {
+	subID = strings.TrimSpace(subID)
+	if subID == "" {
+		return nil, nil
+	}
+	var rows []struct {
+		ID int `gorm:"column:id"`
+	}
+	err := database.GetDB().Raw(`
+		SELECT DISTINCT inbounds.id
+		FROM inbounds,
+			JSON_EACH(JSON_EXTRACT(inbounds.settings, '$.clients')) AS client
+		WHERE
+			protocol in ('vmess','vless','trojan','shadowsocks','hysteria','hysteria2')
+			AND JSON_EXTRACT(client.value, '$.subId') = ?
+			AND enable = ?`, subID, true).Scan(&rows).Error
+	if err != nil {
+		return nil, err
+	}
+	ids := make([]int, 0, len(rows))
+	for _, row := range rows {
+		if row.ID > 0 {
+			ids = append(ids, row.ID)
+		}
+	}
+	return ids, nil
+}
+
+func buildUpstreamNodeContent(rows []upstreamNodeContentRow) ([]string, []map[string]any) {
+	links := make([]string, 0, len(rows))
+	clashProxies := make([]map[string]any, 0)
+	for _, row := range rows {
+		if strings.TrimSpace(row.Link) != "" {
+			links = append(links, row.Link)
+		}
+		if strings.TrimSpace(row.Clash) != "" {
+			var proxy map[string]any
+			if err := json.Unmarshal([]byte(row.Clash), &proxy); err == nil && len(proxy) > 0 {
+				clashProxies = append(clashProxies, proxy)
+			}
+		}
+	}
+	return links, clashProxies
 }
 
 func (s *SubscriptionMarketService) newCustomerToken() string {
