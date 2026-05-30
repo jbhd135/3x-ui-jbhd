@@ -457,7 +457,70 @@ func (s *SubscriptionMarketService) SetInboundNodes(inboundID int, nodeIDs []int
 }
 
 func (s *SubscriptionMarketService) GetInboundSubscriptionContent(subID string) (*InboundSubscriptionContent, error) {
-	return &InboundSubscriptionContent{}, nil
+	inboundIDs, err := s.inboundIDsBySubID(subID)
+	if err != nil {
+		return nil, err
+	}
+	if len(inboundIDs) == 0 {
+		return &InboundSubscriptionContent{}, nil
+	}
+
+	var rows []upstreamNodeContentRow
+	err = database.GetDB().Table("inbound_subscription_nodes").
+		Select("DISTINCT upstream_nodes.id, upstream_subscriptions.id AS upstream_sort_id, upstream_nodes.sort, upstream_nodes.link, upstream_nodes.clash").
+		Joins("JOIN upstream_nodes ON upstream_nodes.id = inbound_subscription_nodes.node_id").
+		Joins("JOIN upstream_subscriptions ON upstream_subscriptions.id = upstream_nodes.upstream_id").
+		Where("inbound_subscription_nodes.inbound_id IN ?", inboundIDs).
+		Where("upstream_nodes.enable = ? AND upstream_subscriptions.enable = ?", true, true).
+		Order("upstream_subscriptions.id desc, upstream_nodes.sort asc, upstream_nodes.id asc").
+		Scan(&rows).Error
+	if err != nil {
+		return nil, err
+	}
+
+	links, clashProxies := buildUpstreamNodeContent(rows)
+	return &InboundSubscriptionContent{
+		Links:      links,
+		ClashProxy: clashProxies,
+	}, nil
+}
+
+func (s *SubscriptionMarketService) GetCustomerSubscription(token string) (*CustomerSubscriptionContent, error) {
+	token = strings.TrimSpace(token)
+	var customer model.CustomerSubscription
+	db := database.GetDB()
+	if err := db.Where("token = ?", token).First(&customer).Error; err != nil {
+		return nil, mapGormNotFound(err, ErrCustomerNotFound)
+	}
+	if !customer.Enable {
+		return nil, ErrCustomerDisabled
+	}
+	if customer.ExpiryTime > 0 && time.Now().UnixMilli() > customer.ExpiryTime {
+		return nil, ErrCustomerExpired
+	}
+
+	var rows []upstreamNodeContentRow
+	err := db.Table("customer_subscription_nodes").
+		Select("upstream_nodes.link, upstream_nodes.clash").
+		Joins("JOIN upstream_nodes ON upstream_nodes.id = customer_subscription_nodes.node_id").
+		Joins("JOIN upstream_subscriptions ON upstream_subscriptions.id = upstream_nodes.upstream_id").
+		Where("customer_subscription_nodes.customer_id = ?", customer.Id).
+		Where("upstream_nodes.enable = ? AND upstream_subscriptions.enable = ?", true, true).
+		Order("upstream_subscriptions.id desc, upstream_nodes.sort asc, upstream_nodes.id asc").
+		Scan(&rows).Error
+	if err != nil {
+		return nil, err
+	}
+
+	links, clashProxies := buildUpstreamNodeContent(rows)
+	if len(links) == 0 && len(clashProxies) == 0 {
+		return nil, ErrCustomerNoEnabledNodes
+	}
+	return &CustomerSubscriptionContent{
+		Links:      links,
+		ClashProxy: clashProxies,
+		Customer:   customer,
+	}, nil
 }
 
 func (s *SubscriptionMarketService) BuildClashSubscription(content *CustomerSubscriptionContent) (string, error) {
