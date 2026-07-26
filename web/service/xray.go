@@ -218,23 +218,6 @@ func applyUpstreamRelayInbounds(xrayConfig *xray.Config) error {
 	return (&SubscriptionMarketService{}).ApplyUpstreamRelayRuntime(xrayConfig)
 }
 
-func uniqueRelayTags(tags []string) []string {
-	if len(tags) == 0 {
-		return tags
-	}
-	seen := make(map[string]bool, len(tags))
-	unique := make([]string, 0, len(tags))
-	for _, tag := range tags {
-		tag = strings.TrimSpace(tag)
-		if tag == "" || seen[tag] {
-			continue
-		}
-		seen[tag] = true
-		unique = append(unique, tag)
-	}
-	return unique
-}
-
 func applyInboundSocksProxy(xrayConfig *xray.Config, inbound *model.Inbound) error {
 	if xrayConfig == nil || inbound == nil || !inbound.SocksProxyEnabled {
 		return nil

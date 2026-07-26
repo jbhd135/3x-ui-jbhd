@@ -33,7 +33,6 @@ const subscriptionInfoNodeUUID = "00000000-0000-0000-0000-000000000000"
 const relayPortStart = 20000
 const relayPortEnd = 29999
 const relayTagPrefix = "xui-relay-node-"
-const inboundRelayFastOutboundTag = "xui-relay-direct"
 const directHysteria2NameMarker = "\u76f4\u8fde"
 
 var upstreamFetchUserAgents = []string{
@@ -1861,24 +1860,6 @@ func relayDisabledSniffing() json_util.RawMessage {
 	return json_util.RawMessage(`{"enabled":false}`)
 }
 
-func relayFastFreedomOutbound() map[string]any {
-	return map[string]any{
-		"tag":      inboundRelayFastOutboundTag,
-		"protocol": "freedom",
-		"settings": map[string]any{
-			"domainStrategy": "AsIs",
-			"redirect":       "",
-			"noises":         []any{},
-		},
-		"streamSettings": map[string]any{
-			"sockopt": map[string]any{
-				"tcpFastOpen":          true,
-				"tcpKeepAliveInterval": 15,
-			},
-		},
-	}
-}
-
 type relayRuntimeRow struct {
 	InboundId          int
 	InboundTag         string
@@ -1930,22 +1911,6 @@ func (s *SubscriptionMarketService) ApplyUpstreamRelayRuntime(xrayConfig *xray.C
 		}
 	}
 	return appendRelayRouting(xrayConfig, outbounds, rules)
-}
-
-func relayOutboundTagForRuntimeRow(row relayRuntimeRow) (string, bool) {
-	if row.SocksProxyEnabled && strings.TrimSpace(row.SocksProxyHost) != "" && row.SocksProxyPort > 0 {
-		inbound := model.Inbound{
-			Id:                 row.InboundId,
-			Tag:                row.InboundTag,
-			SocksProxyEnabled:  row.SocksProxyEnabled,
-			SocksProxyHost:     row.SocksProxyHost,
-			SocksProxyPort:     row.SocksProxyPort,
-			SocksProxyUsername: row.SocksProxyUsername,
-			SocksProxyPassword: row.SocksProxyPassword,
-		}
-		return inboundSocksProxyTag(&inbound), false
-	}
-	return inboundRelayFastOutboundTag, true
 }
 
 func appendRelayRouting(xrayConfig *xray.Config, relayOutbounds []any, relayRules []any) error {
@@ -2825,10 +2790,6 @@ func nextRelayPort(used map[int]bool) (int, error) {
 	return 0, fmt.Errorf("no available relay port in %d-%d", relayPortStart, relayPortEnd)
 }
 
-func upstreamRelayTag(nodeID int) string {
-	return fmt.Sprintf("%s%d", relayTagPrefix, nodeID)
-}
-
 func upstreamRelayNodeID(tag string) (int, bool) {
 	if !strings.HasPrefix(tag, relayTagPrefix) {
 		return 0, false
@@ -2883,26 +2844,6 @@ func normalizeRelayPublicHost(raw string) string {
 		}
 	}
 	return raw
-}
-
-func rewriteRelayLink(link, name, relayHost string, relayPort int) (string, bool) {
-	link = strings.TrimSpace(link)
-	if link == "" || relayHost == "" || relayPort <= 0 {
-		return "", false
-	}
-	switch uriProtocol(link) {
-	case "vmess":
-		return rewriteRelayVMessLink(link, name, relayHost, relayPort)
-	case "ss":
-		if rewritten, ok := rewriteRelayURLLink(link, name, relayHost, relayPort); ok {
-			return rewritten, true
-		}
-		return rewriteRelayLegacySSLink(link, name, relayHost, relayPort)
-	case "vless", "trojan", "hysteria", "hysteria2", "hy2", "tuic", "wireguard":
-		return rewriteRelayURLLink(link, name, relayHost, relayPort)
-	default:
-		return "", false
-	}
 }
 
 func authenticatedRelayLink(protocol, sourceLink, name, relayHost string, relayPort int, relayUUID string) (string, bool) {
@@ -2976,82 +2917,9 @@ func authenticatedHysteria2RelayLink(sourceLink, name, relayHost string, relayPo
 	return u.String(), true
 }
 
-func rewriteRelayVMessLink(link, name, relayHost string, relayPort int) (string, bool) {
-	data, ok := parseVMessLinkData(link)
-	if !ok {
-		return "", false
-	}
-	if strings.TrimSpace(name) != "" {
-		data["ps"] = strings.TrimSpace(name)
-	}
-	data["add"] = relayHost
-	data["port"] = relayPort
-	encoded, err := json.Marshal(data)
-	if err != nil {
-		return "", false
-	}
-	return "vmess://" + base64.StdEncoding.EncodeToString(encoded), true
-}
-
-func rewriteRelayURLLink(link, name, relayHost string, relayPort int) (string, bool) {
-	u, err := url.Parse(link)
-	if err != nil || u.Host == "" {
-		return "", false
-	}
-	u.Host = formatClashHostPort(relayHost, relayPort)
-	if strings.TrimSpace(name) != "" {
-		setURLFragmentEncoded(u, strings.TrimSpace(name))
-	}
-	return u.String(), true
-}
-
 func setURLFragmentEncoded(u *url.URL, fragment string) {
 	u.Fragment = fragment
 	u.RawFragment = strings.ReplaceAll(url.QueryEscape(fragment), "+", "%20")
-}
-
-func rewriteRelayLegacySSLink(link, name, relayHost string, relayPort int) (string, bool) {
-	rest := strings.TrimSpace(strings.TrimPrefix(link, "ss://"))
-	if rest == "" {
-		return "", false
-	}
-	fragment := ""
-	if before, after, ok := strings.Cut(rest, "#"); ok {
-		rest = before
-		fragment = after
-	}
-	query := ""
-	if before, after, ok := strings.Cut(rest, "?"); ok {
-		rest = before
-		query = after
-	}
-	decoded, ok := decodeBase64Any(rest)
-	if !ok {
-		return "", false
-	}
-	at := strings.LastIndex(decoded, "@")
-	if at < 0 {
-		return "", false
-	}
-	rewritten := decoded[:at+1] + formatClashHostPort(relayHost, relayPort)
-	result := "ss://" + base64.RawURLEncoding.EncodeToString([]byte(rewritten))
-	if query != "" {
-		result += "?" + query
-	}
-	if strings.TrimSpace(name) != "" {
-		result += "#" + url.QueryEscape(strings.TrimSpace(name))
-	} else if fragment != "" {
-		result += "#" + fragment
-	}
-	return result, true
-}
-
-func rewriteRelayClashProxy(proxy map[string]any, name, relayHost string, relayPort int) {
-	if strings.TrimSpace(name) != "" {
-		proxy["name"] = strings.TrimSpace(name)
-	}
-	proxy["server"] = relayHost
-	proxy["port"] = relayPort
 }
 
 func rewriteAuthenticatedRelayClashProxy(proxy map[string]any, protocol, name, relayHost string, relayPort int, relayUUID string) bool {

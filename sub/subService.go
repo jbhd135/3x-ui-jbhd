@@ -49,7 +49,6 @@ func (s *SubService) GetSubs(subId string, host string) ([]string, int64, xray.C
 	var lastOnline int64
 	var hasEnabledClient bool
 	var clientTraffics []xray.ClientTraffic
-	var inboundExpiryTimes []int64
 	inbounds, err := s.getInboundsBySubId(subId)
 	if err != nil {
 		return nil, 0, traffic, err
@@ -79,13 +78,8 @@ func (s *SubService) GetSubs(subId string, host string) ([]string, int64, xray.C
 				inbound.StreamSettings = streamSettings
 			}
 		}
-		hasMatchedClient := false
 		for _, client := range clients {
 			if client.SubID == subId {
-				if !hasMatchedClient {
-					inboundExpiryTimes = append(inboundExpiryTimes, inbound.ExpiryTime)
-					hasMatchedClient = true
-				}
 				if client.Enable {
 					hasEnabledClient = true
 				}
@@ -134,19 +128,6 @@ func (s *SubService) GetSubs(subId string, host string) ([]string, int64, xray.C
 	}
 	traffic.Enable = hasEnabledClient
 	return result, lastOnline, traffic, nil
-}
-
-func earliestPositiveExpiry(expiryTimes []int64) int64 {
-	var expiryTime int64
-	for _, candidate := range expiryTimes {
-		if candidate <= 0 {
-			continue
-		}
-		if expiryTime == 0 || candidate < expiryTime {
-			expiryTime = candidate
-		}
-	}
-	return expiryTime
 }
 
 func (s *SubService) resolveNodeHost(requestHost string) string {
