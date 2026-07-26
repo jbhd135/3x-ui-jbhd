@@ -41,6 +41,10 @@ func (j *XrayTrafficJob) Run() {
 	if err != nil {
 		logger.Warning("add outbound traffic failed:", err)
 	}
+	if err := (&service.SubscriptionMarketService{}).AddRelayTraffic(traffics); err != nil {
+		logger.Warning("add upstream relay traffic failed:", err)
+	}
+	markRelayTrafficActivity(traffics)
 	if clientsDisabled {
 		restartOnDisable, settingErr := j.settingService.GetRestartXrayOnClientDisable()
 		if settingErr != nil {

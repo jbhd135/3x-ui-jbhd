@@ -2,7 +2,7 @@
 
 set -euo pipefail
 
-GITHUB_REPO="${GITHUB_REPO:-}"
+GITHUB_REPO="${GITHUB_REPO:-jbhd135/3x-ui-jbhd}"
 INSTALL_VERSION="${INSTALL_VERSION:-latest}"
 ASSUME_YES="false"
 SKIP_START="false"
@@ -26,12 +26,10 @@ XUI_CLI_BIN="${XUI_CLI_BIN:-/usr/bin/x-ui}"
 usage() {
   cat <<'EOF'
 Usage:
-  ./scripts/install-selfhosted.sh --repo owner/repo [--version v1.2.3]
-
-Required:
-  --repo            GitHub repository, for example: yourname/3x-ui
+  ./scripts/install-selfhosted.sh [--version v1.2.3]
 
 Optional:
+  --repo            GitHub repository. Default: jbhd135/3x-ui-jbhd
   --version         Release tag to install. Default: latest
   --username        Panel login username. Prompts when omitted on fresh install
   --password        Panel login password. Prompts when omitted on fresh install
@@ -492,7 +490,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 [[ $EUID -eq 0 ]] || die "Please run this script as root"
-[[ -n "$GITHUB_REPO" ]] || die "--repo or GITHUB_REPO is required"
+[[ "$GITHUB_REPO" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || die "Invalid GitHub repository: $GITHUB_REPO"
 
 require_cmd curl
 require_cmd tar

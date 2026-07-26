@@ -109,6 +109,20 @@
             this.inbound.stream.tcp.type = "http";
             this.dbInbound.deviceLimit = 1;
         },
+        applyHysteria2Defaults() {
+            if (!this.inbound || this.inbound.protocol !== Protocols.HYSTERIA) return;
+            this.inbound.stream.network = "hysteria";
+            this.inbound.stream.security = "tls";
+            this.inbound.stream.tls.sni = window.location.hostname;
+            this.inbound.stream.tls.alpn = [ALPN_OPTION.H3];
+            if (!Array.isArray(this.inbound.stream.tls.certs) || this.inbound.stream.tls.certs.length === 0) {
+                this.inbound.stream.tls.certs = [new TlsStreamSettings.Cert()];
+            }
+            const cert = this.inbound.stream.tls.certs[0];
+            cert.useFile = true;
+            if (app.defaultCert && !cert.certFile) cert.certFile = app.defaultCert;
+            if (app.defaultKey && !cert.keyFile) cert.keyFile = app.defaultKey;
+        },
         close() {
             inModal.visible = false;
             inModal.loading(false);

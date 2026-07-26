@@ -38,6 +38,7 @@ func (a *InboundController) initRouter(g *gin.RouterGroup) {
 	g.POST("/add", a.addInbound)
 	g.POST("/del/:id", a.delInbound)
 	g.POST("/update/:id", a.updateInbound)
+	g.POST("/:id/dailyTrafficLimit", a.updateInboundDailyTrafficLimit)
 	g.POST("/clientIps/:email", a.getClientIps)
 	g.POST("/clearClientIps/:email", a.clearClientIps)
 	g.POST("/addClient", a.addInboundClient)
@@ -186,6 +187,38 @@ func (a *InboundController) updateInbound(c *gin.Context) {
 		a.xrayService.SetToNeedRestart()
 	}
 	// Broadcast inbounds update via WebSocket
+	user := session.GetLoginUser(c)
+	inbounds, _ := a.inboundService.GetInbounds(user.Id)
+	websocket.BroadcastInbounds(inbounds)
+}
+
+type updateInboundDailyTrafficLimitRequest struct {
+	DailyTrafficLimit int64 `form:"dailyTrafficLimit" json:"dailyTrafficLimit"`
+}
+
+func (a *InboundController) updateInboundDailyTrafficLimit(c *gin.Context) {
+	id, err := strconv.Atoi(c.Param("id"))
+	if err != nil {
+		jsonMsg(c, I18nWeb(c, "pages.inbounds.toasts.inboundUpdateSuccess"), err)
+		return
+	}
+
+	request := &updateInboundDailyTrafficLimitRequest{}
+	if err := c.ShouldBind(request); err != nil {
+		jsonMsg(c, I18nWeb(c, "pages.inbounds.toasts.inboundUpdateSuccess"), err)
+		return
+	}
+
+	inbound, needRestart, err := a.inboundService.UpdateInboundDailyTrafficLimit(id, request.DailyTrafficLimit)
+	if err != nil {
+		jsonMsg(c, I18nWeb(c, "somethingWentWrong"), err)
+		return
+	}
+	jsonMsgObj(c, I18nWeb(c, "pages.inbounds.toasts.inboundUpdateSuccess"), inbound, nil)
+	if needRestart {
+		a.xrayService.SetToNeedRestart()
+	}
+
 	user := session.GetLoginUser(c)
 	inbounds, _ := a.inboundService.GetInbounds(user.Id)
 	websocket.BroadcastInbounds(inbounds)

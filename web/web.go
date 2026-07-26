@@ -334,6 +334,13 @@ func (s *Server) startTask() {
 	go inboundRemarkExpiryJob.Run()
 	s.cron.AddJob("@hourly", inboundRemarkExpiryJob)
 
+	// Restore clients blocked by the daily traffic allowance at midnight. Run
+	// once on startup as well so downtime across midnight does not delay the
+	// recovery until the following day.
+	dailyClientTrafficLimitJob := job.NewDailyClientTrafficLimitJob(&s.xrayService)
+	go dailyClientTrafficLimitJob.Run()
+	s.cron.AddJob("@daily", dailyClientTrafficLimitJob)
+
 	// check client ips from log file every day
 	s.cron.AddJob("@daily", job.NewClearLogsJob())
 

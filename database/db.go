@@ -36,14 +36,20 @@ func initModels() error {
 		&model.OutboundTraffics{},
 		&model.Setting{},
 		&model.InboundClientIps{},
+		&model.DailyClientTraffic{},
 		&xray.ClientTraffic{},
 		&model.HistoryOfSeeders{},
 		&model.CustomGeoResource{},
 		&model.UpstreamSubscription{},
 		&model.UpstreamNode{},
+		&model.UpstreamNodeConfig{},
+		&model.UpstreamNodeConfigNode{},
 		&model.CustomerSubscription{},
 		&model.CustomerSubscriptionNode{},
 		&model.InboundSubscriptionNode{},
+		&model.InboundEmergencyUpstream{},
+		&model.InboundUpstreamConfig{},
+		&model.InboundUpstreamRelay{},
 	}
 	for _, model := range models {
 		if err := db.AutoMigrate(model); err != nil {

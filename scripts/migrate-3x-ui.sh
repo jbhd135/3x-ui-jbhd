@@ -313,15 +313,67 @@ PY
 }
 
 collect_source_cert_paths() {
+  local -A seen_paths=()
   local key
   local value
-  for key in webCertFile webKeyFile subCertFile subKeyFile; do
-    value="$(local_db_setting "$key" | tr -d '\r')"
-    if [[ -n "$value" ]]; then
+
+  require_cmd python3
+  while IFS=$'\t' read -r key value; do
+    value="${value//$'\r'/}"
+    [[ -n "$value" ]] || continue
+    [[ "$value" == /* ]] || die "Certificate path must be absolute: $key=$value"
+    if [[ -z "${seen_paths[$value]:-}" ]]; then
       SOURCE_CERT_KEYS+=("$key")
       SOURCE_CERT_PATHS+=("$value")
+      seen_paths["$value"]="true"
     fi
-  done
+  done < <(python3 - "$LOCAL_DB_SNAPSHOT" <<'PY'
+import json
+import sqlite3
+import sys
+
+db_path = sys.argv[1]
+conn = sqlite3.connect(db_path)
+cur = conn.cursor()
+
+for key in ("webCertFile", "webKeyFile", "subCertFile", "subKeyFile"):
+    row = cur.execute(
+        "select value from settings where key = ? limit 1", (key,)
+    ).fetchone()
+    if row and row[0]:
+        print(f"{key}\t{str(row[0]).strip()}")
+
+def walk(value, prefix):
+    if isinstance(value, dict):
+        for key, child in value.items():
+            child_prefix = f"{prefix}.{key}" if prefix else key
+            if key in ("certificateFile", "keyFile") and isinstance(child, str):
+                path = child.strip()
+                if path:
+                    print(f"{child_prefix}\t{path}")
+            walk(child, child_prefix)
+    elif isinstance(value, list):
+        for index, child in enumerate(value):
+            walk(child, f"{prefix}[{index}]")
+
+try:
+    rows = cur.execute("select stream_settings from inbounds").fetchall()
+except sqlite3.OperationalError:
+    rows = []
+
+for index, (raw_settings,) in enumerate(rows):
+    if not raw_settings:
+        continue
+    try:
+        settings = json.loads(raw_settings)
+    except (TypeError, json.JSONDecodeError):
+        continue
+    walk(settings, f"inbounds[{index}].stream_settings")
+
+conn.close()
+PY
+  )
+
   if [[ ${#SOURCE_CERT_PATHS[@]} -gt 0 ]]; then
     EFFECTIVE_COPY_CERTS="true"
   fi
@@ -340,8 +392,7 @@ download_source_certs() {
       source_scp_from "$remote_path" "$local_path"
       LOCAL_CERT_FILES+=("$local_path")
     else
-      log "Source file not found, skipping: $remote_path"
-      LOCAL_CERT_FILES+=("")
+      die "Configured certificate file is missing on source: $remote_path"
     fi
   done
 }
@@ -366,6 +417,12 @@ create_target_backup() {
     fi
     if [ -f '$TARGET_DB_PATH' ]; then
       cp -a '$TARGET_DB_PATH' \"\$backup_dir/x-ui.db\"
+    fi
+    if [ -d /root/cert ]; then
+      tar -C /root -czf \"\$backup_dir/root-cert.old.tar.gz\" cert
+    fi
+    if [ -d /etc/letsencrypt ]; then
+      tar -C /etc -czf \"\$backup_dir/letsencrypt.old.tar.gz\" letsencrypt
     fi
     if [ -f '$TARGET_ENV_PATH' ]; then
       cp -a '$TARGET_ENV_PATH' \"\$backup_dir/default-x-ui.env\"
@@ -414,6 +471,16 @@ rollback_target() {
       rm -f '$TARGET_DB_PATH'
     fi
 
+    rm -rf /root/cert
+    if [ -f '$BACKUP_DIR/root-cert.old.tar.gz' ]; then
+      tar -C /root -xzf '$BACKUP_DIR/root-cert.old.tar.gz'
+    fi
+
+    rm -rf /etc/letsencrypt
+    if [ -f '$BACKUP_DIR/letsencrypt.old.tar.gz' ]; then
+      tar -C /etc -xzf '$BACKUP_DIR/letsencrypt.old.tar.gz'
+    fi
+
     if [ -f '$BACKUP_DIR/default-x-ui.env' ]; then
       install -m 0644 '$BACKUP_DIR/default-x-ui.env' '$TARGET_ENV_PATH'
     else
@@ -448,6 +515,8 @@ verify_target_db() {
     '$TARGET_XUI_PATH' setting -show true >/dev/null
     if command -v python3 >/dev/null 2>&1; then
       python3 - <<'PY'
+import json
+import os
 import sqlite3
 
 conn = sqlite3.connect('$TARGET_DB_PATH')
@@ -457,10 +526,66 @@ need = ['traffic_reset', 'last_traffic_reset_time', 'socks_proxy_enabled']
 missing = [name for name in need if name not in cols]
 if missing:
     raise SystemExit('missing migrated columns: ' + ', '.join(missing))
+
+cert_paths = []
+for key in ('webCertFile', 'webKeyFile', 'subCertFile', 'subKeyFile'):
+    row = cur.execute(
+        'select value from settings where key = ? limit 1', (key,)
+    ).fetchone()
+    if row and row[0]:
+        cert_paths.append((key, str(row[0]).strip()))
+
+def walk(value, prefix):
+    if isinstance(value, dict):
+        for key, child in value.items():
+            child_prefix = f'{prefix}.{key}' if prefix else key
+            if key in ('certificateFile', 'keyFile') and isinstance(child, str):
+                path = child.strip()
+                if path:
+                    cert_paths.append((child_prefix, path))
+            walk(child, child_prefix)
+    elif isinstance(value, list):
+        for index, child in enumerate(value):
+            walk(child, f'{prefix}[{index}]')
+
+for index, (raw_settings,) in enumerate(
+    cur.execute('select stream_settings from inbounds').fetchall()
+):
+    if not raw_settings:
+        continue
+    try:
+        settings = json.loads(raw_settings)
+    except (TypeError, json.JSONDecodeError):
+        continue
+    walk(settings, f'inbounds[{index}].stream_settings')
+
+missing_cert_paths = [
+    f'{key}={path}' for key, path in cert_paths if not os.path.isfile(path)
+]
+if missing_cert_paths:
+    raise SystemExit(
+        'missing configured certificate files: ' + ', '.join(missing_cert_paths)
+    )
+
 print('inbound_columns_ok')
+print('certificate_paths_ok')
 conn.close()
 PY
     fi
+  "
+}
+
+verify_target_runtime() {
+  target_ssh "set -e
+    for attempt in \$(seq 1 10); do
+      if pgrep -f '[x]ray-linux-.*bin/config.json' >/dev/null 2>&1; then
+        exit 0
+      fi
+      sleep 1
+    done
+    echo 'xray process did not start after migration' >&2
+    journalctl -u x-ui -n 80 --no-pager >&2 || true
+    exit 1
   "
 }
 
@@ -558,8 +683,8 @@ install_target_files() {
       fi
       remote_path="${SOURCE_CERT_PATHS[$i]}"
       remote_tmp_path="$REMOTE_TARGET_TMP_DIR/cert-$i"
-      case "${SOURCE_CERT_KEYS[$i]}" in
-        webKeyFile|subKeyFile)
+      case "${SOURCE_CERT_KEYS[$i],,}" in
+        *keyfile*)
           perm="0600"
           ;;
         *)
@@ -798,7 +923,7 @@ if [[ "$EFFECTIVE_COPY_ENV" == "true" && "$SOURCE_ENV_EXISTS" == "yes" ]]; then
   source_scp_from "$SOURCE_ENV_PATH" "$LOCAL_ENV"
 fi
 
-if [[ "$TARGET_BOOTSTRAP_NEEDED" == "true" && "$EFFECTIVE_COPY_DB" == "true" ]]; then
+if [[ "$EFFECTIVE_COPY_DB" == "true" ]]; then
   collect_source_cert_paths
   if [[ "$EFFECTIVE_COPY_CERTS" == "true" ]]; then
     log "Detected certificate paths in source database"
@@ -819,6 +944,7 @@ target_ssh "set -e
 
 log "Verifying migration result"
 verify_target_db
+verify_target_runtime
 
 TARGET_SHA="$(target_ssh "sha256sum '$TARGET_XUI_PATH' | awk '{print \$1}'")"
 [[ "$TARGET_SHA" == "$SOURCE_SHA" ]] || die "Target x-ui checksum mismatch after install"

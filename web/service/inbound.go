@@ -3,8 +3,17 @@
 package service
 
 import (
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/json"
+	"encoding/pem"
 	"fmt"
+	"math/big"
+	"net"
+	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -31,6 +40,277 @@ type CopyClientsResult struct {
 	Added   []string `json:"added"`
 	Skipped []string `json:"skipped"`
 	Errors  []string `json:"errors"`
+}
+
+const (
+	// The daily allowance is measured as upload plus download. A manual
+	// re-enable grants one additional allowance for the same day.
+	dailyClientTrafficLimitGB        int64 = 5
+	dailyClientTrafficLimitBytes           = dailyClientTrafficLimitGB * 1024 * 1024 * 1024
+	dailyClientTrafficLimit10GBBytes       = 10 * 1024 * 1024 * 1024
+	dailyClientTrafficLimit15GBBytes       = 15 * 1024 * 1024 * 1024
+)
+
+func validDailyClientTrafficLimit(limit int64) bool {
+	switch limit {
+	case 0, dailyClientTrafficLimitBytes, dailyClientTrafficLimit10GBBytes, dailyClientTrafficLimit15GBBytes:
+		return true
+	default:
+		return false
+	}
+}
+
+func dailyClientTrafficThreshold(baseLimit, overrideLimit int64) int64 {
+	if overrideLimit > 0 {
+		return overrideLimit
+	}
+	return baseLimit
+}
+
+func dailyClientTrafficLimitReached(usage, baseLimit, overrideLimit int64) bool {
+	threshold := dailyClientTrafficThreshold(baseLimit, overrideLimit)
+	return threshold > 0 && usage >= threshold
+}
+
+const (
+	hysteriaDefaultCertFile = "/root/cert/hysteria2/self.crt"
+	hysteriaDefaultKeyFile  = "/root/cert/hysteria2/self.key"
+)
+
+func hysteriaDefaultTLSCertFile() string {
+	if value := strings.TrimSpace(os.Getenv("XUI_HYSTERIA_CERT_FILE")); value != "" {
+		return value
+	}
+	return hysteriaDefaultCertFile
+}
+
+func hysteriaDefaultTLSKeyFile() string {
+	if value := strings.TrimSpace(os.Getenv("XUI_HYSTERIA_KEY_FILE")); value != "" {
+		return value
+	}
+	return hysteriaDefaultKeyFile
+}
+
+func ensureHysteriaDefaultTLSCertificate() error {
+	certFile := hysteriaDefaultTLSCertFile()
+	keyFile := hysteriaDefaultTLSKeyFile()
+	if fileExists(certFile) && fileExists(keyFile) {
+		return nil
+	}
+	if strings.TrimSpace(os.Getenv("XUI_HYSTERIA_CERT_FILE")) != "" ||
+		strings.TrimSpace(os.Getenv("XUI_HYSTERIA_KEY_FILE")) != "" {
+		return fmt.Errorf("custom hysteria certificate files are not complete: cert=%s key=%s", certFile, keyFile)
+	}
+
+	if err := os.MkdirAll(filepath.Dir(certFile), 0700); err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(keyFile), 0700); err != nil {
+		return err
+	}
+
+	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		return err
+	}
+	serialNumberLimit := new(big.Int).Lsh(big.NewInt(1), 128)
+	serialNumber, err := rand.Int(rand.Reader, serialNumberLimit)
+	if err != nil {
+		return err
+	}
+	template := x509.Certificate{
+		SerialNumber: serialNumber,
+		Subject: pkix.Name{
+			CommonName: "3x-ui-hysteria2-relay",
+		},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().AddDate(10, 0, 0),
+		KeyUsage:              x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		BasicConstraintsValid: true,
+		DNSNames:              []string{"localhost"},
+		IPAddresses: []net.IP{
+			net.ParseIP("127.0.0.1"),
+			net.ParseIP("::1"),
+		},
+	}
+	certBytes, err := x509.CreateCertificate(rand.Reader, &template, &template, &privateKey.PublicKey, privateKey)
+	if err != nil {
+		return err
+	}
+
+	certOut, err := os.OpenFile(certFile, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0644)
+	if err != nil {
+		return err
+	}
+	if err := pem.Encode(certOut, &pem.Block{Type: "CERTIFICATE", Bytes: certBytes}); err != nil {
+		certOut.Close()
+		return err
+	}
+	if err := certOut.Close(); err != nil {
+		return err
+	}
+
+	keyOut, err := os.OpenFile(keyFile, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
+	if err != nil {
+		return err
+	}
+	if err := pem.Encode(keyOut, &pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(privateKey)}); err != nil {
+		keyOut.Close()
+		return err
+	}
+	if err := keyOut.Close(); err != nil {
+		return err
+	}
+
+	logger.Infof("Generated default Hysteria2 relay certificate: %s", certFile)
+	return nil
+}
+
+func fileExists(path string) bool {
+	if strings.TrimSpace(path) == "" {
+		return false
+	}
+	info, err := os.Stat(path)
+	return err == nil && !info.IsDir()
+}
+
+func ensureHysteriaInboundTLS(inbound *model.Inbound) error {
+	if inbound == nil || !model.IsHysteria(inbound.Protocol) {
+		return nil
+	}
+
+	stream := map[string]any{}
+	if strings.TrimSpace(inbound.StreamSettings) != "" {
+		if err := json.Unmarshal([]byte(inbound.StreamSettings), &stream); err != nil {
+			return err
+		}
+	}
+
+	stream["network"] = "hysteria"
+	stream["security"] = "tls"
+
+	tlsSettings, _ := stream["tlsSettings"].(map[string]any)
+	if tlsSettings == nil {
+		tlsSettings = map[string]any{}
+		stream["tlsSettings"] = tlsSettings
+	}
+
+	if strings.TrimSpace(asString(tlsSettings["serverName"])) == "" {
+		if sni := defaultHysteriaSNI(); sni != "" {
+			tlsSettings["serverName"] = sni
+		}
+	}
+	if alpn, ok := tlsSettings["alpn"].([]any); !ok || len(alpn) == 0 {
+		tlsSettings["alpn"] = []any{"h3"}
+	}
+
+	certificates, _ := tlsSettings["certificates"].([]any)
+	if len(certificates) == 0 {
+		certificates = []any{map[string]any{}}
+	}
+	cert, _ := certificates[0].(map[string]any)
+	if cert == nil {
+		cert = map[string]any{}
+		certificates[0] = cert
+	}
+	if !hasUsableTLSCertificate(cert) {
+		certFile, keyFile, err := defaultHysteriaTLSFiles()
+		if err != nil {
+			return err
+		}
+		cert["certificateFile"] = certFile
+		cert["keyFile"] = keyFile
+		cert["oneTimeLoading"] = false
+		cert["usage"] = "encipherment"
+		cert["buildChain"] = false
+	}
+	tlsSettings["certificates"] = certificates
+
+	hysteriaSettings, _ := stream["hysteriaSettings"].(map[string]any)
+	if hysteriaSettings == nil {
+		hysteriaSettings = map[string]any{}
+		stream["hysteriaSettings"] = hysteriaSettings
+	}
+	if _, ok := hysteriaSettings["version"]; !ok {
+		hysteriaSettings["version"] = 2
+	}
+	if _, ok := hysteriaSettings["udpIdleTimeout"]; !ok {
+		hysteriaSettings["udpIdleTimeout"] = 60
+	}
+
+	data, err := json.MarshalIndent(stream, "", "  ")
+	if err != nil {
+		return err
+	}
+	inbound.StreamSettings = string(data)
+	return nil
+}
+
+func asString(value any) string {
+	if value == nil {
+		return ""
+	}
+	if s, ok := value.(string); ok {
+		return s
+	}
+	return fmt.Sprint(value)
+}
+
+func hasUsableTLSCertificate(cert map[string]any) bool {
+	certFile := strings.TrimSpace(asString(cert["certificateFile"]))
+	keyFile := strings.TrimSpace(asString(cert["keyFile"]))
+	if certFile != "" && keyFile != "" {
+		return true
+	}
+
+	certContent, certOK := cert["certificate"].([]any)
+	keyContent, keyOK := cert["key"].([]any)
+	return certOK && keyOK && len(certContent) > 0 && len(keyContent) > 0
+}
+
+func defaultHysteriaTLSFiles() (string, string, error) {
+	settingService := SettingService{}
+	certFile, _ := settingService.GetCertFile()
+	keyFile, _ := settingService.GetKeyFile()
+	certFile = strings.TrimSpace(certFile)
+	keyFile = strings.TrimSpace(keyFile)
+	if fileExists(certFile) && fileExists(keyFile) {
+		return certFile, keyFile, nil
+	}
+
+	if err := ensureHysteriaDefaultTLSCertificate(); err != nil {
+		return "", "", err
+	}
+	return hysteriaDefaultTLSCertFile(), hysteriaDefaultTLSKeyFile(), nil
+}
+
+func defaultHysteriaSNI() string {
+	if value := strings.TrimSpace(os.Getenv("XUI_HYSTERIA_SNI")); value != "" {
+		return normalizeHysteriaSNI(value)
+	}
+	settingService := SettingService{}
+	domain, _ := settingService.GetWebDomain()
+	return normalizeHysteriaSNI(domain)
+}
+
+func normalizeHysteriaSNI(value string) string {
+	value = strings.TrimSpace(value)
+	value = strings.TrimPrefix(value, "https://")
+	value = strings.TrimPrefix(value, "http://")
+	value = strings.Trim(value, "/")
+	if host, _, err := net.SplitHostPort(value); err == nil {
+		return host
+	}
+	if strings.Contains(value, "/") {
+		value = strings.Split(value, "/")[0]
+	}
+	if strings.Count(value, ":") == 1 {
+		if host, _, err := net.SplitHostPort(value); err == nil {
+			return host
+		}
+	}
+	return value
 }
 
 // GetInbounds retrieves all inbounds for a specific user.
@@ -60,6 +340,9 @@ func (s *InboundService) GetInbounds(userId int) ([]*model.Inbound, error) {
 				inbound.ClientStats[i].SubId = c.SubID
 			}
 		}
+	}
+	if err := s.attachTodayTraffic(inbounds); err != nil {
+		return nil, err
 	}
 	return inbounds, nil
 }
@@ -91,7 +374,50 @@ func (s *InboundService) GetAllInbounds() ([]*model.Inbound, error) {
 			}
 		}
 	}
+	if err := s.attachTodayTraffic(inbounds); err != nil {
+		return nil, err
+	}
 	return inbounds, nil
+}
+
+func (s *InboundService) attachTodayTraffic(inbounds []*model.Inbound) error {
+	if len(inbounds) == 0 {
+		return nil
+	}
+
+	inboundIDs := make([]int, 0, len(inbounds))
+	for _, inbound := range inbounds {
+		if inbound != nil {
+			inboundIDs = append(inboundIDs, inbound.Id)
+		}
+	}
+	if len(inboundIDs) == 0 {
+		return nil
+	}
+
+	var totals []struct {
+		InboundID int   `gorm:"column:inbound_id"`
+		Total     int64 `gorm:"column:total"`
+	}
+	err := database.GetDB().Model(&model.DailyClientTraffic{}).
+		Select("inbound_id, COALESCE(SUM(up + down), 0) AS total").
+		Where("date = ? AND inbound_id IN ?", s.monitorTrafficDate(), inboundIDs).
+		Group("inbound_id").
+		Scan(&totals).Error
+	if err != nil {
+		return err
+	}
+
+	totalByInboundID := make(map[int]int64, len(totals))
+	for _, total := range totals {
+		totalByInboundID[total.InboundID] = total.Total
+	}
+	for _, inbound := range inbounds {
+		if inbound != nil {
+			inbound.TodayTraffic = totalByInboundID[inbound.Id]
+		}
+	}
+	return nil
 }
 
 func (s *InboundService) GetInboundsByTrafficReset(period string) ([]*model.Inbound, error) {
@@ -244,6 +570,9 @@ func (s *InboundService) AddInbound(inbound *model.Inbound) (*model.Inbound, boo
 		return inbound, false, common.NewError("Port already exists:", inbound.Port)
 	}
 	if err := s.validateSocksProxy(inbound); err != nil {
+		return inbound, false, err
+	}
+	if err := ensureHysteriaInboundTLS(inbound); err != nil {
 		return inbound, false, err
 	}
 
@@ -409,6 +738,120 @@ func (s *InboundService) GetInbound(id int) (*model.Inbound, error) {
 	return inbound, nil
 }
 
+// UpdateInboundDailyTrafficLimit changes the per-client daily allowance for
+// one inbound. Selecting a higher allowance (or unlimited) immediately
+// restores an inbound that was blocked only by today's daily limit.
+func (s *InboundService) UpdateInboundDailyTrafficLimit(id int, limit int64) (*model.Inbound, bool, error) {
+	if !validDailyClientTrafficLimit(limit) {
+		return nil, false, common.NewError("Unsupported daily traffic limit")
+	}
+
+	db := database.GetDB()
+	inbound := &model.Inbound{}
+	needRestart := false
+	err := db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.First(inbound, id).Error; err != nil {
+			return err
+		}
+
+		oldEnable := inbound.Enable
+		today := s.monitorTrafficDate()
+		if err := tx.Model(&xray.ClientTraffic{}).
+			Where("inbound_id = ?", id).
+			Updates(map[string]any{
+				"daily_blocked_date":   "",
+				"daily_override_limit": 0,
+				"daily_override_date":  "",
+			}).Error; err != nil {
+			return err
+		}
+
+		limitReached := false
+		if limit > 0 {
+			var reachedCount int64
+			if err := tx.Table("daily_client_traffics").
+				Joins("JOIN client_traffics ON client_traffics.inbound_id = daily_client_traffics.inbound_id AND client_traffics.email = daily_client_traffics.client_email").
+				Where("daily_client_traffics.date = ? AND daily_client_traffics.inbound_id = ?", today, id).
+				Where("client_traffics.enable = ?", true).
+				Where("daily_client_traffics.up + daily_client_traffics.down >= ?", limit).
+				Count(&reachedCount).Error; err != nil {
+				return err
+			}
+			limitReached = reachedCount > 0
+		}
+
+		now := time.Now().UnixMilli()
+		depleted := (inbound.Total > 0 && inbound.Up+inbound.Down >= inbound.Total) ||
+			(inbound.ExpiryTime > 0 && inbound.ExpiryTime <= now)
+		wasDailyBlocked := inbound.DailyTrafficBlockedDate == today
+		nextEnable := inbound.Enable
+		nextBlockedDate := inbound.DailyTrafficBlockedDate
+
+		if inbound.Enable && limitReached {
+			nextEnable = false
+			nextBlockedDate = today
+		} else if wasDailyBlocked && !limitReached {
+			nextEnable = !depleted
+			nextBlockedDate = ""
+		}
+
+		if err := tx.Model(&model.Inbound{}).Where("id = ?", id).Updates(map[string]any{
+			"daily_traffic_limit":        limit,
+			"daily_traffic_blocked_date": nextBlockedDate,
+			"enable":                     nextEnable,
+		}).Error; err != nil {
+			return err
+		}
+
+		inbound.DailyTrafficLimit = limit
+		inbound.DailyTrafficBlockedDate = nextBlockedDate
+		inbound.Enable = nextEnable
+		needRestart = oldEnable != nextEnable
+		return nil
+	})
+	if err != nil {
+		return nil, false, err
+	}
+	return inbound, needRestart, nil
+}
+
+func (s *InboundService) grantDailyInboundOverride(tx *gorm.DB, inboundID int, today string, baseLimit int64) error {
+	var clients []xray.ClientTraffic
+	if err := tx.Where("inbound_id = ?", inboundID).Find(&clients).Error; err != nil {
+		return err
+	}
+	var dailyRows []model.DailyClientTraffic
+	if err := tx.Where("inbound_id = ? AND date = ?", inboundID, today).Find(&dailyRows).Error; err != nil {
+		return err
+	}
+	dailyUsage := make(map[string]int64, len(dailyRows))
+	for _, row := range dailyRows {
+		dailyUsage[row.ClientEmail] = row.Up + row.Down
+	}
+
+	for _, client := range clients {
+		usage := dailyUsage[client.Email]
+		overrideLimit := client.DailyOverrideLimit
+		if client.DailyOverrideDate != today {
+			overrideLimit = 0
+		}
+		updates := map[string]any{
+			"daily_blocked_date": "",
+		}
+		if dailyClientTrafficLimitReached(usage, baseLimit, overrideLimit) {
+			updates["daily_override_limit"] = usage + baseLimit
+			updates["daily_override_date"] = today
+		} else if overrideLimit <= 0 {
+			updates["daily_override_limit"] = 0
+			updates["daily_override_date"] = ""
+		}
+		if err := tx.Model(&xray.ClientTraffic{}).Where("id = ?", client.Id).Updates(updates).Error; err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // UpdateInbound modifies an existing inbound configuration.
 // It validates changes, updates the database, and syncs with the running Xray instance.
 // Returns the updated inbound, whether Xray needs restart, and any error.
@@ -421,6 +864,9 @@ func (s *InboundService) UpdateInbound(inbound *model.Inbound) (*model.Inbound, 
 		return inbound, false, common.NewError("Port already exists:", inbound.Port)
 	}
 	if err := s.validateSocksProxy(inbound); err != nil {
+		return inbound, false, err
+	}
+	if err := ensureHysteriaInboundTLS(inbound); err != nil {
 		return inbound, false, err
 	}
 
@@ -441,6 +887,23 @@ func (s *InboundService) UpdateInbound(inbound *model.Inbound) (*model.Inbound, 
 			tx.Commit()
 		}
 	}()
+
+	// Opening an inbound that was automatically blocked by the daily limit is
+	// a manual override. Grant another 5 GB to the clients that already crossed
+	// today's normal threshold, then clear the inbound's auto-block marker.
+	today := s.monitorTrafficDate()
+	dailyBlockedDate := oldInbound.DailyTrafficBlockedDate
+	if oldInbound.DailyTrafficBlockedDate == today {
+		if inbound.Enable && !oldInbound.Enable {
+			if err = s.grantDailyInboundOverride(tx, oldInbound.Id, today, oldInbound.DailyTrafficLimit); err != nil {
+				return inbound, false, err
+			}
+			dailyBlockedDate = ""
+		} else if !inbound.Enable {
+			// A manual disable must not be auto-restored at midnight.
+			dailyBlockedDate = ""
+		}
+	}
 
 	err = s.updateClientTraffics(tx, oldInbound, inbound)
 	if err != nil {
@@ -513,6 +976,7 @@ func (s *InboundService) UpdateInbound(inbound *model.Inbound) (*model.Inbound, 
 	oldInbound.Total = inbound.Total
 	oldInbound.Remark = inbound.Remark
 	oldInbound.Enable = inbound.Enable
+	oldInbound.DailyTrafficBlockedDate = dailyBlockedDate
 	oldInbound.ExpiryTime = inbound.ExpiryTime
 	oldInbound.DeviceLimit = inbound.DeviceLimit
 	oldInbound.TrafficReset = inbound.TrafficReset
@@ -791,6 +1255,140 @@ func (s *InboundService) AddInboundClient(data *model.Inbound) (bool, error) {
 	s.xrayApi.Close()
 
 	return needRestart, tx.Save(oldInbound).Error
+}
+
+// ResetDailyClientTrafficLimits re-enables inbounds that were automatically
+// blocked by the daily allowance and whose block belongs to a previous day.
+// It intentionally leaves manually disabled, expired, or total-depleted
+// inbounds disabled.
+func (s *InboundService) ResetDailyClientTrafficLimits() (int64, error) {
+	db := database.GetDB()
+	var resetCount int64
+	err := db.Transaction(func(tx *gorm.DB) error {
+		var err error
+		resetCount, err = s.resetDailyClientTrafficLimits(tx)
+		return err
+	})
+	return resetCount, err
+}
+
+func (s *InboundService) resetDailyClientTrafficLimits(tx *gorm.DB) (int64, error) {
+	if tx == nil {
+		return 0, fmt.Errorf("daily traffic reset requires a database transaction")
+	}
+
+	today := s.monitorTrafficDate()
+	now := time.Now().UnixMilli()
+	// Manual re-enable allowances are valid only on the day they were granted.
+	// This also clears legacy overrides created before daily_override_date was
+	// introduced, whose date is empty after migration.
+	if err := tx.Model(&xray.ClientTraffic{}).
+		Where("daily_override_limit > 0 AND COALESCE(daily_override_date, '') <> ?", today).
+		Updates(map[string]any{
+			"daily_override_limit": 0,
+			"daily_override_date":  "",
+		}).Error; err != nil {
+		return 0, err
+	}
+	var resetCount int64
+	legacyCount, err := s.migrateLegacyDailyClientBlocks(tx, today, now)
+	if err != nil {
+		return 0, err
+	}
+	resetCount += legacyCount
+
+	var blocked []model.Inbound
+	if err := tx.Where("daily_traffic_blocked_date <> '' AND daily_traffic_blocked_date <> ?", today).Find(&blocked).Error; err != nil {
+		return 0, err
+	}
+	if len(blocked) == 0 {
+		return resetCount, nil
+	}
+
+	for i := range blocked {
+		reactivate := !((blocked[i].Total > 0 && blocked[i].Up+blocked[i].Down >= blocked[i].Total) ||
+			(blocked[i].ExpiryTime > 0 && blocked[i].ExpiryTime <= now))
+		if err := tx.Model(&model.Inbound{}).Where("id = ?", blocked[i].Id).Updates(map[string]any{
+			"enable":                     reactivate,
+			"daily_traffic_blocked_date": "",
+		}).Error; err != nil {
+			return 0, err
+		}
+		if reactivate {
+			resetCount++
+		}
+	}
+	return resetCount, nil
+}
+
+// migrateLegacyDailyClientBlocks converts the previous client-level daily
+// limiter state into the new inbound-level state. It is intentionally kept so
+// existing installations do not remain with a client disabled but its
+// inbound switch still enabled.
+func (s *InboundService) migrateLegacyDailyClientBlocks(tx *gorm.DB, today string, now int64) (int64, error) {
+	var legacy []xray.ClientTraffic
+	if err := tx.Where("daily_blocked_date = ?", today).Find(&legacy).Error; err != nil {
+		return 0, err
+	}
+	if len(legacy) == 0 {
+		return 0, nil
+	}
+
+	var changed int64
+	for _, traffic := range legacy {
+		var inbound model.Inbound
+		if err := tx.First(&inbound, traffic.InboundId).Error; err != nil {
+			continue
+		}
+		depleted := (inbound.Total > 0 && inbound.Up+inbound.Down >= inbound.Total) ||
+			(inbound.ExpiryTime > 0 && inbound.ExpiryTime <= now)
+		clientEnable := !depleted
+		if clientEnable && (inbound.DailyTrafficBlockedDate == "" || inbound.Enable) {
+			inbound.Enable = false
+			inbound.DailyTrafficBlockedDate = today
+			if err := tx.Save(&inbound).Error; err != nil {
+				return 0, err
+			}
+			changed++
+		}
+		if err := tx.Model(&xray.ClientTraffic{}).Where("id = ?", traffic.Id).Updates(map[string]any{
+			"enable":               clientEnable,
+			"daily_blocked_date":   "",
+			"daily_override_limit": 0,
+			"daily_override_date":  "",
+		}).Error; err != nil {
+			return 0, err
+		}
+
+		settings := map[string]any{}
+		if err := json.Unmarshal([]byte(inbound.Settings), &settings); err != nil {
+			continue
+		}
+		clients, ok := settings["clients"].([]any)
+		if !ok {
+			continue
+		}
+		for i := range clients {
+			client, ok := clients[i].(map[string]any)
+			if !ok || client["email"] != traffic.Email {
+				continue
+			}
+			client["enable"] = clientEnable
+			client["updated_at"] = now
+			clients[i] = client
+			settings["clients"] = clients
+			updatedSettings, err := json.MarshalIndent(settings, "", "  ")
+			if err != nil {
+				return 0, err
+			}
+			inbound.Settings = string(updatedSettings)
+			if err := tx.Save(&inbound).Error; err != nil {
+				return 0, err
+			}
+			break
+		}
+	}
+	return changed, nil
 }
 
 func (s *InboundService) getClientPrimaryKey(protocol model.Protocol, client model.Client) string {
@@ -1196,11 +1794,51 @@ func (s *InboundService) UpdateInboundClient(data *model.Inbound, clientId strin
 		}
 	}()
 
+	// A manual re-enable after an automatic daily-limit block grants one more
+	// daily allowance. A manual disable clears the marker so it will not be
+	// silently re-enabled at midnight.
+	dailyActionUpdates := map[string]any{}
+	if oldEmail != "" {
+		var oldTraffic xray.ClientTraffic
+		if trafficErr := tx.Where("email = ?", oldEmail).First(&oldTraffic).Error; trafficErr == nil {
+			today := s.monitorTrafficDate()
+			if clients[0].Enable && !oldTraffic.Enable && oldTraffic.DailyBlockedDate == today {
+				var dailyTraffic model.DailyClientTraffic
+				usage := int64(0)
+				trafficErr := tx.Where("date = ? AND inbound_id = ? AND client_email = ?", today, oldTraffic.InboundId, oldEmail).First(&dailyTraffic).Error
+				if trafficErr == nil {
+					usage = dailyTraffic.Up + dailyTraffic.Down
+				} else if !database.IsNotFound(trafficErr) {
+					err = trafficErr
+					return false, err
+				}
+				dailyActionUpdates["daily_blocked_date"] = ""
+				if oldInbound.DailyTrafficLimit > 0 {
+					dailyActionUpdates["daily_override_limit"] = usage + oldInbound.DailyTrafficLimit
+					dailyActionUpdates["daily_override_date"] = today
+				} else {
+					dailyActionUpdates["daily_override_limit"] = 0
+					dailyActionUpdates["daily_override_date"] = ""
+				}
+			} else if !clients[0].Enable && oldTraffic.DailyBlockedDate == today {
+				dailyActionUpdates["daily_blocked_date"] = ""
+				dailyActionUpdates["daily_override_limit"] = 0
+				dailyActionUpdates["daily_override_date"] = ""
+			}
+		}
+	}
+
 	if len(clients[0].Email) > 0 {
 		if len(oldEmail) > 0 {
 			err = s.UpdateClientStat(tx, oldEmail, &clients[0])
 			if err != nil {
 				return false, err
+			}
+			if len(dailyActionUpdates) > 0 {
+				err = tx.Model(&xray.ClientTraffic{}).Where("email = ?", clients[0].Email).Updates(dailyActionUpdates).Error
+				if err != nil {
+					return false, err
+				}
 			}
 			err = s.UpdateClientIPs(tx, oldEmail, clients[0].Email)
 			if err != nil {
@@ -1276,6 +1914,14 @@ func (s *InboundService) AddTraffic(inboundTraffics []*xray.Traffic, clientTraff
 			tx.Commit()
 		}
 	}()
+
+	// Recover clients that were daily-limit blocked before collecting the
+	// first traffic sample of a new day. This also covers panel restarts that
+	// happen after midnight and before the scheduled daily job runs.
+	dailyResetCount, resetErr := s.resetDailyClientTrafficLimits(tx)
+	if resetErr != nil {
+		return false, false, resetErr
+	}
 	err = s.addInboundTraffic(tx, inboundTraffics)
 	if err != nil {
 		return false, false, err
@@ -1290,6 +1936,13 @@ func (s *InboundService) AddTraffic(inboundTraffics []*xray.Traffic, clientTraff
 		logger.Warning("Error in renew clients:", err)
 	} else if count > 0 {
 		logger.Debugf("%v clients renewed", count)
+	}
+
+	dailyNeedRestart, dailyInboundCount, err := s.disableDailyLimitInbounds(tx)
+	if err != nil {
+		logger.Warning("Error in disabling daily-limit inbounds:", err)
+	} else if dailyInboundCount > 0 {
+		logger.Debugf("%v inbounds disabled by daily traffic limit", dailyInboundCount)
 	}
 
 	disabledClientsCount := int64(0)
@@ -1307,7 +1960,7 @@ func (s *InboundService) AddTraffic(inboundTraffics []*xray.Traffic, clientTraff
 	} else if count > 0 {
 		logger.Debugf("%v inbounds disabled", count)
 	}
-	return (needRestart0 || needRestart1 || needRestart2), disabledClientsCount > 0, nil
+	return (dailyResetCount > 0 || dailyNeedRestart || needRestart0 || needRestart1 || needRestart2), disabledClientsCount > 0, nil
 }
 
 func (s *InboundService) addInboundTraffic(tx *gorm.DB, traffics []*xray.Traffic) error {
@@ -1364,12 +2017,17 @@ func (s *InboundService) addClientTraffic(tx *gorm.DB, traffics []*xray.ClientTr
 		return err
 	}
 
+	dailyTrafficDate := s.monitorTrafficDate()
 	for dbTraffic_index := range dbClientTraffics {
 		for traffic_index := range traffics {
 			if dbClientTraffics[dbTraffic_index].Email == traffics[traffic_index].Email {
 				dbClientTraffics[dbTraffic_index].Up += traffics[traffic_index].Up
 				dbClientTraffics[dbTraffic_index].Down += traffics[traffic_index].Down
 				dbClientTraffics[dbTraffic_index].AllTime += (traffics[traffic_index].Up + traffics[traffic_index].Down)
+				if err = s.addDailyClientTrafficDelta(tx, dailyTrafficDate, dbClientTraffics[dbTraffic_index].InboundId,
+					traffics[traffic_index].Email, traffics[traffic_index].Up, traffics[traffic_index].Down); err != nil {
+					return err
+				}
 
 				// Add user in onlineUsers array on traffic
 				if traffics[traffic_index].Up+traffics[traffic_index].Down > 0 {
@@ -1580,6 +2238,76 @@ func (s *InboundService) disableInvalidInbounds(tx *gorm.DB) (bool, int64, error
 	return needRestart, count, err
 }
 
+// disableDailyLimitInbounds applies the daily client allowance at the
+// inbound level. The client remains enabled in the database; the inbound
+// switch is what temporarily stops all traffic for that customer entry.
+func (s *InboundService) disableDailyLimitInbounds(tx *gorm.DB) (bool, int64, error) {
+	today := s.monitorTrafficDate()
+	dailyUsage := "COALESCE(daily_client_traffics.up, 0) + COALESCE(daily_client_traffics.down, 0)"
+	dailyThreshold := "CASE WHEN client_traffics.daily_override_limit > 0 AND client_traffics.daily_override_date = ? THEN client_traffics.daily_override_limit ELSE inbounds.daily_traffic_limit END"
+	dailyLimitCondition := "inbounds.daily_traffic_limit > 0 AND " + dailyUsage + " >= " + dailyThreshold
+
+	var candidates []struct {
+		InboundId int
+		Tag       string
+		Email     string
+	}
+	err := tx.Table("inbounds").
+		Select("inbounds.id as inbound_id, inbounds.tag, client_traffics.email").
+		Joins("JOIN client_traffics ON inbounds.id = client_traffics.inbound_id").
+		Joins("JOIN daily_client_traffics ON daily_client_traffics.inbound_id = client_traffics.inbound_id AND daily_client_traffics.client_email = client_traffics.email AND daily_client_traffics.date = ?", today).
+		Where("inbounds.enable = ? AND client_traffics.enable = ? AND "+dailyLimitCondition, true, true, today).
+		Scan(&candidates).Error
+	if err != nil {
+		return false, 0, err
+	}
+	if len(candidates) == 0 {
+		return false, 0, nil
+	}
+
+	inboundTags := make(map[int]string, len(candidates))
+	for _, candidate := range candidates {
+		inboundTags[candidate.InboundId] = candidate.Tag
+	}
+	needRestart := false
+	if p != nil {
+		s.xrayApi.Init(p.GetAPIPort())
+		for inboundID, tag := range inboundTags {
+			if err := s.xrayApi.DelInbound(tag); err != nil {
+				logger.Warningf("Error in disabling inbound %d by daily traffic limit: %v", inboundID, err)
+				needRestart = true
+			}
+		}
+		s.xrayApi.Close()
+	}
+
+	ids := make([]int, 0, len(inboundTags))
+	for id := range inboundTags {
+		ids = append(ids, id)
+	}
+	result := tx.Model(&model.Inbound{}).Where("id IN ? AND enable = ?", ids, true).Updates(map[string]any{
+		"enable":                     false,
+		"daily_traffic_blocked_date": today,
+	})
+	if result.Error != nil {
+		return needRestart, result.RowsAffected, result.Error
+	}
+
+	// A previous manual override is consumed when the next daily threshold is
+	// reached, so the next manual enable grants a fresh additional allowance.
+	for _, candidate := range candidates {
+		if err := tx.Model(&xray.ClientTraffic{}).
+			Where("inbound_id = ? AND email = ?", candidate.InboundId, candidate.Email).
+			Updates(map[string]any{
+				"daily_override_limit": 0,
+				"daily_override_date":  "",
+			}).Error; err != nil {
+			return needRestart, result.RowsAffected, err
+		}
+	}
+	return needRestart, result.RowsAffected, nil
+}
+
 func (s *InboundService) disableInvalidClients(tx *gorm.DB) (bool, int64, error) {
 	now := time.Now().Unix() * 1000
 	needRestart := false
@@ -1589,11 +2317,12 @@ func (s *InboundService) disableInvalidClients(tx *gorm.DB) (bool, int64, error)
 		Tag       string
 		Email     string
 	}
+	depletedCondition := "((client_traffics.total > 0 AND client_traffics.up + client_traffics.down >= client_traffics.total) OR (client_traffics.expiry_time > 0 AND client_traffics.expiry_time <= " + strconv.FormatInt(now, 10) + "))"
 
 	err := tx.Table("inbounds").
 		Select("inbounds.id as inbound_id, inbounds.tag, client_traffics.email").
 		Joins("JOIN client_traffics ON inbounds.id = client_traffics.inbound_id").
-		Where("((client_traffics.total > 0 AND client_traffics.up + client_traffics.down >= client_traffics.total) OR (client_traffics.expiry_time > 0 AND client_traffics.expiry_time <= ?)) AND client_traffics.enable = ?", now, true).
+		Where(depletedCondition+" AND client_traffics.enable = ?", true).
 		Scan(&clientsToDisable).Error
 	if err != nil {
 		return false, 0, err
@@ -1618,14 +2347,13 @@ func (s *InboundService) disableInvalidClients(tx *gorm.DB) (bool, int64, error)
 	}
 
 	result := tx.Model(xray.ClientTraffic{}).
-		Where("((total > 0 and up + down >= total) or (expiry_time > 0 and expiry_time <= ?)) and enable = ?", now, true).
+		Where(depletedCondition+" AND enable = ?", true).
 		Update("enable", false)
 	err = result.Error
 	count := result.RowsAffected
 	if err != nil {
 		return needRestart, count, err
 	}
-
 	// Also set enable=false in inbounds.settings JSON so clients are visibly disabled
 	if len(clientsToDisable) > 0 {
 		inboundEmailMap := make(map[int]map[string]struct{})

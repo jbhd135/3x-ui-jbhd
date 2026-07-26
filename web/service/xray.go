@@ -3,11 +3,14 @@ package service
 import (
 	"encoding/json"
 	"errors"
+	"os"
 	"runtime"
 	"strconv"
 	"strings"
 	"sync"
 
+	"github.com/mhsanaei/3x-ui/v2/config"
+	"github.com/mhsanaei/3x-ui/v2/database"
 	"github.com/mhsanaei/3x-ui/v2/database/model"
 	"github.com/mhsanaei/3x-ui/v2/logger"
 	"github.com/mhsanaei/3x-ui/v2/xray"
@@ -112,9 +115,13 @@ func (s *XrayService) GetXrayConfig() (*xray.Config, error) {
 	if err != nil {
 		return nil, err
 	}
+	ensureAccessLogForDeviceLimits(xrayConfig, inbounds)
 	for _, inbound := range inbounds {
 		if !inbound.Enable {
 			continue
+		}
+		if err := ensureHysteriaInboundTLS(inbound); err != nil {
+			return nil, err
 		}
 		// get settings clients
 		settings := map[string]any{}
@@ -151,7 +158,7 @@ func (s *XrayService) GetXrayConfig() (*xray.Config, error) {
 
 				// clear client config for additional parameters
 				for key := range c {
-					if key != "email" && key != "id" && key != "password" && key != "flow" && key != "method" && key != "auth" {
+					if key != "email" && key != "id" && key != "password" && key != "flow" && key != "method" && key != "auth" && key != "reverse" {
 						delete(c, key)
 					}
 					if flow, ok := c["flow"].(string); ok && flow == "xtls-rprx-vision-udp443" {
@@ -201,7 +208,31 @@ func (s *XrayService) GetXrayConfig() (*xray.Config, error) {
 			return nil, err
 		}
 	}
+	if err := applyUpstreamRelayInbounds(xrayConfig); err != nil {
+		return nil, err
+	}
 	return xrayConfig, nil
+}
+
+func applyUpstreamRelayInbounds(xrayConfig *xray.Config) error {
+	return (&SubscriptionMarketService{}).ApplyUpstreamRelayRuntime(xrayConfig)
+}
+
+func uniqueRelayTags(tags []string) []string {
+	if len(tags) == 0 {
+		return tags
+	}
+	seen := make(map[string]bool, len(tags))
+	unique := make([]string, 0, len(tags))
+	for _, tag := range tags {
+		tag = strings.TrimSpace(tag)
+		if tag == "" || seen[tag] {
+			continue
+		}
+		seen[tag] = true
+		unique = append(unique, tag)
+	}
+	return unique
 }
 
 func applyInboundSocksProxy(xrayConfig *xray.Config, inbound *model.Inbound) error {
@@ -328,6 +359,68 @@ func isAPIRoutingRule(rule any) bool {
 		return false
 	}
 	return ruleMap["outboundTag"] == "api"
+}
+
+func ensureAccessLogForDeviceLimits(xrayConfig *xray.Config, inbounds []*model.Inbound) {
+	if xrayConfig == nil || (!hasAnyDeviceLimit(inbounds) && !hasAnyInboundRelays()) {
+		return
+	}
+
+	logConfig := map[string]any{}
+	if len(xrayConfig.LogConfig) > 0 && strings.TrimSpace(string(xrayConfig.LogConfig)) != "null" {
+		_ = json.Unmarshal(xrayConfig.LogConfig, &logConfig)
+	}
+	access, _ := logConfig["access"].(string)
+	if strings.TrimSpace(access) != "" && strings.TrimSpace(access) != "none" {
+		return
+	}
+
+	logFolder := config.GetLogFolder()
+	if err := os.MkdirAll(logFolder, 0o755); err != nil {
+		logger.Warningf("[DEVICE_LIMIT] Failed to create log folder %s: %v", logFolder, err)
+	}
+	logConfig["access"] = logFolder + "/access.log"
+	if _, ok := logConfig["error"]; !ok {
+		logConfig["error"] = ""
+	}
+	if _, ok := logConfig["loglevel"]; !ok {
+		logConfig["loglevel"] = "warning"
+	}
+	updated, err := json.MarshalIndent(logConfig, "", "  ")
+	if err != nil {
+		logger.Warningf("[DEVICE_LIMIT] Failed to update access log config: %v", err)
+		return
+	}
+	xrayConfig.LogConfig = updated
+}
+
+func hasAnyDeviceLimit(inbounds []*model.Inbound) bool {
+	for _, inbound := range inbounds {
+		if inbound == nil || !inbound.Enable {
+			continue
+		}
+		if inbound.DeviceLimit > 0 {
+			return true
+		}
+		var settings map[string][]model.Client
+		if err := json.Unmarshal([]byte(inbound.Settings), &settings); err != nil {
+			continue
+		}
+		for _, client := range settings["clients"] {
+			if client.LimitIP > 0 {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func hasAnyInboundRelays() bool {
+	var count int64
+	if err := database.GetDB().Model(model.InboundUpstreamRelay{}).Where("relay_port > 0").Count(&count).Error; err != nil {
+		return false
+	}
+	return count > 0
 }
 
 // GetXrayTraffic fetches the current traffic statistics from the running Xray process.

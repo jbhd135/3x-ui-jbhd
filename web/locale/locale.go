@@ -154,7 +154,7 @@ func loadTranslationsFromDisk(bundle *i18n.Bundle) error {
 		if err != nil {
 			return err
 		}
-		if d.IsDir() {
+		if d.IsDir() || shouldSkipTranslationFile(d.Name()) {
 			return nil
 		}
 		data, err := fs.ReadFile(root, path)
@@ -177,6 +177,9 @@ func parseTranslationFiles(i18nFS embed.FS, i18nBundle *i18n.Bundle) error {
 			if d.IsDir() {
 				return nil
 			}
+			if shouldSkipTranslationFile(d.Name()) {
+				return nil
+			}
 
 			data, err := i18nFS.ReadFile(path)
 			if err != nil {
@@ -191,4 +194,8 @@ func parseTranslationFiles(i18nFS embed.FS, i18nBundle *i18n.Bundle) error {
 	}
 
 	return nil
+}
+
+func shouldSkipTranslationFile(name string) bool {
+	return strings.HasPrefix(name, ".") || !strings.HasSuffix(name, ".toml")
 }

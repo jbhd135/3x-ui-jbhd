@@ -24,42 +24,24 @@
 
 ## 快速开始
 
-```
-bash <(curl -Ls https://raw.githubusercontent.com/mhsanaei/3x-ui/master/install.sh)
-```
-
-完整文档请参阅 [项目Wiki](https://github.com/MHSanaei/3x-ui/wiki)。
-
-## 自托管一键安装
-
-如果您只想在新服务器上一键安装您自己的改版 `3x-ui`，不需要迁移数据库，可以使用：
-
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/你的GitHub用户名/你的仓库名/main/scripts/install-selfhosted.sh) \
-  --repo 你的GitHub用户名/你的仓库名
+bash <(curl -fsSL https://raw.githubusercontent.com/jbhd135/3x-ui-jbhd/main/scripts/install-selfhosted.sh)
 ```
 
 安装过程中会提示您设置面板用户名、密码、端口和访问路径。
 安装完成后，脚本会输出浏览器登录网址、用户名和密码清单，方便您直接登录。
 
-如果您想把配置直接写在命令里，可以使用：
+无人值守安装（用于自动迁移）：
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/你的GitHub用户名/你的仓库名/main/scripts/install-selfhosted.sh) \
-  --repo 你的GitHub用户名/你的仓库名 \
-  --username admin \
-  --password '请改成强密码' \
-  --port 2053 \
-  --web-base-path /jbhd/ \
-  --public-host your-domain.com \
-  --yes
+bash <(curl -fsSL https://raw.githubusercontent.com/jbhd135/3x-ui-jbhd/main/scripts/install-selfhosted.sh) \
+  --no-config-prompt --skip-start --yes
 ```
 
 说明：
 
-- 该脚本会从您自己仓库的 GitHub Release 下载 `x-ui-linux-架构.tar.gz` 安装包。
-- 您需要先把当前仓库推送到自己的 GitHub 仓库，并创建一个标签发布，让 Actions 生成 Release 资产。
-- 脚本不做迁移；数据库和证书可以在安装完成后由您自己上传覆盖。
+- 该脚本固定从 `jbhd135/3x-ui-jbhd` 的最新 GitHub Release 下载对应架构安装包。
+- 自动迁移会先执行无人值守安装，再用 Google Drive 最新恢复点覆盖数据库和证书。
 - 如果服务器上没有现成数据库，脚本会进入配置流程；直接回车会使用安全随机账号、密码、端口，路径默认 `/jbhd/`。
 - 如果服务器上已有 `/etc/x-ui/x-ui.db`，脚本会询问是否重新配置面板；如需跳过询问并强制重新设置，可附加 `--configure`。
 

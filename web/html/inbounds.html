@@ -54,7 +54,7 @@
                     </a-custom-statistic>
                   </a-col>
                   <a-col :sm="12" :md="4">
-                    <a-custom-statistic title='{{ i18n "clients" }}' value=" "
+                    <a-custom-statistic title='入站人数' value=" "
                       :style="{ marginTop: isMobile ? '10px' : 0 }">
                       <template #prefix>
                         <a-space direction="horizontal">
@@ -62,40 +62,8 @@
                           <div>
                             <a-back-top :target="() => document.getElementById('content-layout')"
                               visibility-height="200"></a-back-top>
-                            <a-tag color="green">[[ total.clients ]]</a-tag>
-                            <a-popover title='{{ i18n "disabled" }}' :overlay-class-name="themeSwitcher.currentTheme">
-                              <template slot="content">
-                                <div v-for="clientEmail in total.deactive"><span>[[
-                                    clientEmail ]]</span></div>
-                              </template>
-                              <a-tag v-if="total.deactive.length">[[
-                                total.deactive.length ]]</a-tag>
-                            </a-popover>
-                            <a-popover title='{{ i18n "depleted" }}' :overlay-class-name="themeSwitcher.currentTheme">
-                              <template slot="content">
-                                <div v-for="clientEmail in total.depleted"><span>[[
-                                    clientEmail ]]</span></div>
-                              </template>
-                              <a-tag color="red" v-if="total.depleted.length">[[
-                                total.depleted.length ]]</a-tag>
-                            </a-popover>
-                            <a-popover title='{{ i18n "depletingSoon" }}'
-                              :overlay-class-name="themeSwitcher.currentTheme">
-                              <template slot="content">
-                                <div v-for="clientEmail in total.expiring"><span>[[
-                                    clientEmail ]]</span></div>
-                              </template>
-                              <a-tag color="orange" v-if="total.expiring.length">[[
-                                total.expiring.length ]]</a-tag>
-                            </a-popover>
-                            <a-popover title='{{ i18n "online" }}' :overlay-class-name="themeSwitcher.currentTheme">
-                              <template slot="content">
-                                <div v-for="clientEmail in onlineClients"><span>[[
-                                    clientEmail ]]</span></div>
-                              </template>
-                              <a-tag color="blue" v-if="onlineClients.length">[[
-                                onlineClients.length ]]</a-tag>
-                            </a-popover>
+                            <a-tag color="green">[[ total.inbounds ]]</a-tag>
+                            <a-tag color="blue">[[ total.activeInbounds ]]</a-tag>
                           </div>
                         </a-space>
                       </template>
@@ -211,6 +179,7 @@
                     :data-source="searchedInbounds" :scroll="isMobile ? {} : { x: 1000 }"
                     :pagination=pagination(searchedInbounds) :expand-icon-as-cell="false" :expand-row-by-click="false"
                     :expand-icon-column-index="0" :indent-size="0"
+                    @expand="handleInboundExpand"
                     :row-class-name="dbInbound => (dbInbound.isMultiUser() ? '' : 'hideExpandIcon')"
                     :style="{ marginTop: '10px' }"
                     :locale='{ filterConfirm: `{{ i18n "confirm" }}`, filterReset: `{{ i18n "reset" }}`, emptyText: `{{ i18n "noData" }}` }'>
@@ -271,10 +240,6 @@
                             <a-icon type="copy"></a-icon>
                             {{ i18n "pages.inbounds.exportInbound" }}
                           </a-menu-item>
-                          <a-menu-item key="upstreamNodes">
-                            <a-icon type="cluster"></a-icon>
-                            上游节点
-                          </a-menu-item>
                           <a-menu-item key="resetTraffic">
                             <a-icon type="retweet"></a-icon> {{ i18n
                             "pages.inbounds.resetTraffic" }}
@@ -310,8 +275,8 @@
                     </template>
                     <template slot="clients" slot-scope="text, dbInbound">
                       <template v-if="clientCount[dbInbound.id]">
-                        <a-tag :style="{ margin: '0' }" color="green">[[
-                          clientCount[dbInbound.id].clients ]]</a-tag>
+                        <a-tag class="count-dot-tag" :style="{ margin: '0' }" color="green">[[
+                          inboundDisplayClientCount(dbInbound) ]]</a-tag>
                         <a-popover title='{{ i18n "disabled" }}' :overlay-class-name="themeSwitcher.currentTheme">
                           <template slot="content">
                             <div v-for="clientEmail in clientCount[dbInbound.id].deactive" :key="clientEmail"
@@ -387,51 +352,53 @@
                                   v-if="clientCount[dbInbound.id].comments.get(clientEmail)"></a-icon>
                               </a-tooltip>
                             </div>
+                            <div v-for="item in getInboundRelayActiveRows(dbInbound.id)" :key="item.key"
+                              class="client-popup-item">
+                              <span>[[ item.nodeName ]]</span>
+                              <a-tag color="green">[[ item.ip ]]</a-tag>
+                              <span>[[ item.clientsText ]]</span>
+                            </div>
                           </template>
-                          <a-tag :style="{ margin: '0', padding: '0 2px' }" color="blue"
-                            v-if="clientCount[dbInbound.id].online.length">[[
-                            clientCount[dbInbound.id].online.length
+                          <a-tag class="count-dot-tag" :style="{ margin: '0', padding: '0 2px' }" color="blue"
+                            v-if="inboundDisplayOnlineCount(dbInbound)">[[
+                            inboundDisplayOnlineCount(dbInbound)
                             ]]</a-tag>
                         </a-popover>
                       </template>
                     </template>
                     <template slot="deviceLimit" slot-scope="text, dbInbound">
-                      <span v-if="dbInbound.deviceLimit > 0">[[ dbInbound.deviceLimit ]]</span>
-                      <span v-else>{{ i18n "pages.inbounds.unlimited" }}</span>
-                    </template>
-                    <template slot="traffic" slot-scope="text, dbInbound">
-                      <a-popover :overlay-class-name="themeSwitcher.currentTheme">
-                        <template slot="content">
-                          <table cellpadding="2" width="100%">
-                            <tr>
-                              <td>↑[[ SizeFormatter.sizeFormat(dbInbound.up)
-                                ]]</td>
-                              <td>↓[[ SizeFormatter.sizeFormat(dbInbound.down)
-                                ]]</td>
-                            </tr>
-                            <tr v-if="dbInbound.total > 0 &&  dbInbound.up + dbInbound.down < dbInbound.total">
-                              <td>{{ i18n "remained" }}</td>
-                              <td>[[ SizeFormatter.sizeFormat(dbInbound.total -
-                                dbInbound.up - dbInbound.down) ]]</td>
-                            </tr>
-                          </table>
-                        </template>
-                        <a-tag
-                          :color="ColorUtils.usageColor(dbInbound.up + dbInbound.down, app.trafficDiff, dbInbound.total)">
-                          [[ SizeFormatter.sizeFormat(dbInbound.up +
-                          dbInbound.down) ]] /
-                          <template v-if="dbInbound.total > 0">
-                            [[ SizeFormatter.sizeFormat(dbInbound.total) ]]
-                          </template>
-                          <template v-else>
-                            <svg height="10px" width="14px" viewBox="0 0 640 512" fill="currentColor">
-                              <path
-                                d="M484.4 96C407 96 349.2 164.1 320 208.5C290.8 164.1 233 96 155.6 96C69.75 96 0 167.8 0 256s69.75 160 155.6 160C233.1 416 290.8 347.9 320 303.5C349.2 347.9 407 416 484.4 416C570.3 416 640 344.2 640 256S570.3 96 484.4 96zM155.6 368C96.25 368 48 317.8 48 256s48.25-112 107.6-112c67.75 0 120.5 82.25 137.1 112C276 285.8 223.4 368 155.6 368zM484.4 368c-67.75 0-120.5-82.25-137.1-112C364 226.2 416.6 144 484.4 144C543.8 144 592 194.2 592 256S543.8 368 484.4 368z"
-                                fill="currentColor"></path>
-                            </svg>
-                          </template>
+                      <template v-if="dbInbound.deviceLimit > 0">
+                        <a-tag class="count-dot-tag" :style="{ margin: '0', padding: '0 2px' }" color="green">
+                          [[ dbInbound.deviceLimit ]]
                         </a-tag>
-                      </a-popover>
+                        <a-popover title='已连接 IP' :overlay-class-name="themeSwitcher.currentTheme">
+                          <template slot="content">
+                            <div v-if="getDeviceLimitIPs(dbInbound).length">
+                              <div v-for="item in getDeviceLimitIPs(dbInbound)" :key="item.ip"
+                                class="client-popup-item">
+                                <span>[[ item.ip ]]</span>
+                                <a-tag v-if="item.banned" :style="{ marginLeft: '6px' }" color="red">已限制</a-tag>
+                                <a-tooltip :overlay-class-name="themeSwitcher.currentTheme">
+                                  <template #title>
+                                    首次：[[ formatDeviceLimitSeen(item.firstSeen) ]]
+                                    <br>
+                                    最近：[[ formatDeviceLimitSeen(item.lastSeen) ]]
+                                  </template>
+                                  <a-icon type="info-circle"></a-icon>
+                                </a-tooltip>
+                              </div>
+                            </div>
+                            <span v-else>暂无连接</span>
+                          </template>
+                          <a-tag class="count-dot-tag" :style="{ margin: '0', padding: '0 2px' }" color="blue">
+                            [[ deviceLimitActiveCount(dbInbound) ]]
+                          </a-tag>
+                        </a-popover>
+                      </template>
+                      <span v-else>{{ i18n "unlimited" }}</span>
+                    </template>
+                    <template slot="todayTraffic" slot-scope="text, dbInbound">
+                      <a-tag color="blue">[[ SizeFormatter.sizeFormat(Number(dbInbound.todayTraffic || 0)) ]]</a-tag>
                     </template>
                     <template slot="allTimeInbound" slot-scope="text, dbInbound">
                       <a-tag>[[ SizeFormatter.sizeFormat(dbInbound.allTime || 0)
@@ -441,24 +408,26 @@
                       <a-switch v-model="dbInbound.enable"
                         @change="switchEnable(dbInbound.id,dbInbound.enable)"></a-switch>
                     </template>
-                    <template slot="expiryTime" slot-scope="text, dbInbound">
-                      <a-popover v-if="dbInbound.expiryTime > 0" :overlay-class-name="themeSwitcher.currentTheme">
-                        <template slot="content">
-                          [[ IntlUtil.formatDate(dbInbound.expiryTime) ]]
-                        </template>
-                        <a-tag :style="{ minWidth: '50px' }"
-                          :color="ColorUtils.usageColor(new Date().getTime(), app.expireDiff, dbInbound._expiryTime)">
-                          [[ IntlUtil.formatRelativeTime(dbInbound.expiryTime)
-                          ]]
-                        </a-tag>
-                      </a-popover>
-                      <a-tag v-else color="purple" class="infinite-tag">
-                        <svg height="10px" width="14px" viewBox="0 0 640 512" fill="currentColor">
-                          <path
-                            d="M484.4 96C407 96 349.2 164.1 320 208.5C290.8 164.1 233 96 155.6 96C69.75 96 0 167.8 0 256s69.75 160 155.6 160C233.1 416 290.8 347.9 320 303.5C349.2 347.9 407 416 484.4 416C570.3 416 640 344.2 640 256S570.3 96 484.4 96zM155.6 368C96.25 368 48 317.8 48 256s48.25-112 107.6-112c67.75 0 120.5 82.25 137.1 112C276 285.8 223.4 368 155.6 368zM484.4 368c-67.75 0-120.5-82.25-137.1-112C364 226.2 416.6 144 484.4 144C543.8 144 592 194.2 592 256S543.8 368 484.4 368z"
-                            fill="currentColor"></path>
-                        </svg>
-                      </a-tag>
+                    <template slot="emergencyEnable" slot-scope="text, dbInbound">
+                      <span class="emergency-action-cell">
+                        <a-switch :checked="!!dbInbound.emergencyEnable"
+                          @change="checked => toggleInboundEmergency(dbInbound, checked)"></a-switch>
+                        <a-button size="small" icon="setting" class="emergency-config-trigger"
+                          @click="openInboundEmergencyConfig(dbInbound)"></a-button>
+                      </span>
+                    </template>
+                    <template slot="dailyTrafficLimit" slot-scope="text, dbInbound">
+                      <a-select :value="getInboundDailyTrafficLimit(dbInbound)" size="small"
+                        :disabled="!!dailyTrafficLimitSaving[dbInbound.id]" :style="{ width: '82px' }"
+                        :dropdown-class-name="themeSwitcher.currentTheme" @click.native.stop
+                        @change="value => updateInboundDailyTrafficLimit(dbInbound, value)">
+                        <a-select-option :value="5 * SizeFormatter.ONE_GB">5G</a-select-option>
+                        <a-select-option :value="10 * SizeFormatter.ONE_GB">10G</a-select-option>
+                        <a-select-option :value="15 * SizeFormatter.ONE_GB">15G</a-select-option>
+                        <a-select-option :value="0">∞</a-select-option>
+                      </a-select>
+                      <a-button size="small" icon="setting" class="ml-5 quick-config-trigger"
+                        @click="openQuickConfigModal(dbInbound)">快速配置</a-button>
                     </template>
                     <template slot="info" slot-scope="text, dbInbound">
                       <a-popover placement="bottomRight" :overlay-class-name="themeSwitcher.currentTheme"
@@ -490,7 +459,7 @@
                               <td>{{ i18n "clients" }}</td>
                               <td>
                                 <a-tag :style="{ margin: '0' }" color="blue">[[
-                                  clientCount[dbInbound.id].clients
+                                  inboundDisplayClientCount(dbInbound)
                                   ]]</a-tag>
                                 <a-popover title='{{ i18n "disabled" }}'
                                   :overlay-class-name="themeSwitcher.currentTheme">
@@ -573,10 +542,16 @@
                                           v-if="clientCount[dbInbound.id].comments.get(clientEmail)"></a-icon>
                                       </a-tooltip>
                                     </div>
+                                    <div v-for="item in getInboundRelayActiveRows(dbInbound.id)" :key="item.key"
+                                      class="client-popup-item">
+                                      <span>[[ item.nodeName ]]</span>
+                                      <a-tag color="green">[[ item.ip ]]</a-tag>
+                                      <span>[[ item.clientsText ]]</span>
+                                    </div>
                                   </template>
                                   <a-tag :style="{ margin: '0', padding: '0 2px' }" color="green"
-                                    v-if="clientCount[dbInbound.id].online.length">[[
-                                    clientCount[dbInbound.id].online.length
+                                    v-if="inboundDisplayOnlineCount(dbInbound)">[[
+                                    inboundDisplayOnlineCount(dbInbound)
                                     ]]</a-tag>
                                 </a-popover>
                               </td>
@@ -584,8 +559,32 @@
                             <tr>
                               <td>{{ i18n "pages.inbounds.deviceLimit" }}</td>
                               <td>
-                                <a-tag v-if="dbInbound.deviceLimit > 0">[[ dbInbound.deviceLimit ]]</a-tag>
-                                <a-tag v-else color="purple">{{ i18n "pages.inbounds.unlimited" }}</a-tag>
+                                <template v-if="dbInbound.deviceLimit > 0">
+                                  <a-tag class="count-dot-tag" color="green">[[ dbInbound.deviceLimit ]]</a-tag>
+                                  <a-popover title='已连接 IP' :overlay-class-name="themeSwitcher.currentTheme">
+                                    <template slot="content">
+                                      <div v-if="getDeviceLimitIPs(dbInbound).length">
+                                        <div v-for="item in getDeviceLimitIPs(dbInbound)" :key="item.ip"
+                                          class="client-popup-item">
+                                          <span>[[ item.ip ]]</span>
+                                          <a-tag v-if="item.banned" :style="{ marginLeft: '6px' }"
+                                            color="red">已限制</a-tag>
+                                          <a-tooltip :overlay-class-name="themeSwitcher.currentTheme">
+                                            <template #title>
+                                              首次：[[ formatDeviceLimitSeen(item.firstSeen) ]]
+                                              <br>
+                                              最近：[[ formatDeviceLimitSeen(item.lastSeen) ]]
+                                            </template>
+                                            <a-icon type="info-circle"></a-icon>
+                                          </a-tooltip>
+                                        </div>
+                                      </div>
+                                      <span v-else>暂无连接</span>
+                                    </template>
+                                    <a-tag class="count-dot-tag" color="blue">[[ deviceLimitActiveCount(dbInbound) ]]</a-tag>
+                                  </a-popover>
+                                </template>
+                                <a-tag v-else color="purple">{{ i18n "unlimited" }}</a-tag>
                               </td>
                             </tr>
                             <tr>
@@ -670,6 +669,135 @@
                       </a-popover>
                     </template>
                     <template slot="expandedRowRender" slot-scope="record">
+                      <div v-if="record.emergencyEnable" class="inbound-upstream-monitor">
+                        <a-spin :spinning="isInboundUpstreamTreeLoading(record.id)" size="small">
+                          <a-collapse v-if="getInboundUpstreamGroups(record.id).length"
+                            :bordered="false" :class="themeSwitcher.currentTheme">
+                            <a-collapse-panel v-for="group in getInboundUpstreamGroups(record.id)" :key="group.upstreamId">
+                              <template slot="header">
+                                <span class="node-name">[[ group.upstreamName ]]</span>
+                                <a-tag class="ml-5" :color="group.enable ? 'green' : 'red'">[[ group.enable ? '启用' : '关闭' ]]</a-tag>
+                                <a-tag class="ml-5" color="blue">配置 [[ group.configs.length ]]</a-tag>
+                                <a-tag class="ml-5" color="geekblue">节点 [[ relayGroupNodeCount(group) ]]</a-tag>
+                                <a-tag class="ml-5" color="green">在线 [[ relayGroupActiveCount(record.id, group) ]]</a-tag>
+                                <a-tag class="ml-5" color="cyan">[[ SizeFormatter.sizeFormat(relayGroupUsed(group)) ]]</a-tag>
+                              </template>
+                              <a-collapse :bordered="false" :class="themeSwitcher.currentTheme">
+                                <a-collapse-panel v-for="config in group.configs" :key="config.configId">
+                                  <template slot="header">
+                                    <span class="node-name">[[ config.name ]]</span>
+                                    <a-tag class="ml-5" color="geekblue">节点 [[ relayConfigNodeCount(config) ]]</a-tag>
+                                    <a-tag class="ml-5" color="green">在线 [[ relayConfigActiveCount(record.id, config) ]]</a-tag>
+                                    <a-tag class="ml-5" color="purple">[[ SizeFormatter.sizeFormat(relayConfigUsed(config)) ]]</a-tag>
+                                  </template>
+                                  <a-table size="small" :pagination="false" :row-key="node => node.nodeId"
+                                    :columns="upstreamRelayNodeColumns" :data-source="config.nodes">
+                                    <template slot="relayActions" slot-scope="text, node">
+                                      <a-tooltip>
+                                        <template slot="title">{{ i18n "qrCode" }}</template>
+                                        <a-icon :style="{ fontSize: '22px', marginInlineStart: '14px' }" class="normal-icon"
+                                          type="qrcode" v-if="node.relayLink" @click="showRelayNodeQrcode(node);"></a-icon>
+                                      </a-tooltip>
+                                      <a-tooltip>
+                                        <template slot="title">{{ i18n "pages.inbounds.resetTraffic" }}</template>
+                                        <a-popconfirm @confirm="resetRelayNodeTraffic(record.id, node, false)"
+                                          title='{{ i18n "pages.inbounds.resetTrafficContent"}}'
+                                          :overlay-class-name="themeSwitcher.currentTheme" ok-text='{{ i18n "reset"}}'
+                                          cancel-text='{{ i18n "cancel"}}'>
+                                          <a-icon slot="icon" type="question-circle-o"
+                                            :style="{ color: 'var(--color-primary-100)'}"></a-icon>
+                                          <a-icon :style="{ fontSize: '22px', cursor: 'pointer' }" class="normal-icon"
+                                            type="retweet"></a-icon>
+                                        </a-popconfirm>
+                                      </a-tooltip>
+                                    </template>
+                                    <template slot="relayEnable" slot-scope="text, node">
+                                      <a-switch :checked="node.enable"
+                                        @change="checked => toggleRelayNode(record.id, node, checked)"></a-switch>
+                                    </template>
+                                    <template slot="relayOnline" slot-scope="text, node">
+                                      <a-popover :overlay-class-name="themeSwitcher.currentTheme">
+                                        <template slot="content">
+                                          <table cellpadding="2" width="100%">
+                                            <tr v-for="item in getRelayNodeIPs(record.id, node)" :key="item.ip">
+                                              <td>[[ item.ip ]]</td>
+                                              <td>[[ relayIPClientsText(item) ]]</td>
+                                              <td>[[ formatDeviceLimitSeen(item.lastSeen) ]]</td>
+                                            </tr>
+                                            <tr v-if="getRelayNodeIPs(record.id, node).length === 0">
+                                              <td>暂无连接</td>
+                                            </tr>
+                                          </table>
+                                        </template>
+                                        <a-tag v-if="node.enable && relayNodeActiveCount(record.id, node) > 0" color="green">
+                                          [[ relayNodeActiveCount(record.id, node) ]]
+                                        </a-tag>
+                                        <a-tag v-else>0</a-tag>
+                                      </a-popover>
+                                    </template>
+                                    <template slot="relayClient" slot-scope="text, node">
+                                      <a-space direction="horizontal" :size="2">
+                                        <a-tooltip>
+                                          <template slot="title">
+                                            <template v-if="!node.enable">{{ i18n "disabled" }}</template>
+                                            <template v-else-if="relayNodeActiveCount(record.id, node) > 0">{{ i18n "online" }}</template>
+                                          </template>
+                                          <a-badge :class="relayNodeActiveCount(record.id, node) > 0 ? 'online-animation' : ''"
+                                            :color="node.enable ? relayNodeBadgeColor(record.id, node) : themeSwitcher.isDarkTheme ? '#2c3950' : '#bcbcbc'"></a-badge>
+                                        </a-tooltip>
+                                        <a-space direction="vertical" :size="2">
+                                          <span class="client-email">[[ node.name ]]</span>
+                                          <template v-if="relayNodeActiveCount(record.id, node) > 0">
+                                            <span class="client-comment">客户 [[ relayNodeClientCount(record.id, node) ]] / 设备 [[ relayNodeActiveCount(record.id, node) ]]</span>
+                                          </template>
+                                        </a-space>
+                                      </a-space>
+                                    </template>
+                                    <template slot="relayTraffic" slot-scope="text, node">
+                                      <a-popover :overlay-class-name="themeSwitcher.currentTheme">
+                                        <template slot="content">
+                                          <table cellpadding="2" width="100%">
+                                            <tr>
+                                              <td>↑[[ SizeFormatter.sizeFormat(node.up || 0) ]]</td>
+                                              <td>↓[[ SizeFormatter.sizeFormat(node.down || 0) ]]</td>
+                                            </tr>
+                                          </table>
+                                        </template>
+                                        <div class="tr-table-box">
+                                          <div class="tr-table-rt">[[ SizeFormatter.sizeFormat(relayNodeUsed(node)) ]]</div>
+                                          <div v-if="!node.enable" class="tr-table-bar">
+                                            <a-progress :stroke-color="themeSwitcher.isDarkTheme ? 'rgb(72 84 105)' : '#bcbcbc'"
+                                              :show-info="false" :percent="100" />
+                                          </div>
+                                          <div v-else class="infinite-bar tr-table-bar">
+                                            <a-progress :show-info="false" :percent="100"></a-progress>
+                                          </div>
+                                          <div class="tr-table-lt">
+                                            <span class="tr-infinity-ch">&infin;</span>
+                                          </div>
+                                        </div>
+                                      </a-popover>
+                                    </template>
+                                    <template slot="relayAllTime" slot-scope="text, node">
+                                      <a-tag>[[ SizeFormatter.sizeFormat(node.allTime || relayNodeUsed(node)) ]]</a-tag>
+                                    </template>
+                                    <template slot="relayExpiry" slot-scope="text, node">
+                                      <a-tag :style="{ border: 'none' }" class="infinite-tag">
+                                        <svg height="10px" width="14px" viewBox="0 0 640 512" fill="currentColor">
+                                          <path
+                                            d="M484.4 96C407 96 349.2 164.1 320 208.5C290.8 164.1 233 96 155.6 96C69.75 96 0 167.8 0 256s69.75 160 155.6 160C233.1 416 290.8 347.9 320 303.5C349.2 347.9 407 416 484.4 416C570.3 416 640 344.2 640 256S570.3 96 484.4 96zM155.6 368C96.25 368 48 317.8 48 256s48.25-112 107.6-112c67.75 0 120.5 82.25 137.1 112C276 285.8 223.4 368 155.6 368zM484.4 368c-67.75 0-120.5-82.25-137.1-112C364 226.2 416.6 144 484.4 144C543.8 144 592 194.2 592 256S543.8 368 484.4 368z"
+                                            fill="currentColor"></path>
+                                        </svg>
+                                      </a-tag>
+                                    </template>
+                                  </a-table>
+                                </a-collapse-panel>
+                              </a-collapse>
+                            </a-collapse-panel>
+                          </a-collapse>
+                          <a-empty v-else-if="isInboundUpstreamTreeLoaded(record.id)" description="暂无启用的上游配置"></a-empty>
+                        </a-spin>
+                      </div>
                       <a-table :row-key="client => client.id" :columns="isMobile ? innerMobileColumns : innerColumns"
                         :data-source="getInboundClients(record)" :pagination=pagination(getInboundClients(record))
                         :style="{ margin: `-10px ${isMobile ? '2px' : '22px'} -11px` }">
@@ -690,15 +818,27 @@
     :confirm-loading="inboundUpstreamModal.saving" :class="themeSwitcher.currentTheme" width="820px"
     @ok="submitInboundUpstreamNodes">
     <a-spin :spinning="inboundUpstreamModal.loading" tip="加载中">
-      <a-alert type="info" show-icon message="选中的上游节点会追加到该入站下所有客户的订阅链接里。"
+      <a-alert type="info" show-icon message="选中的上游节点会追加到该入站下游订阅链接里。"
         class="mb-10"></a-alert>
       <a-space class="mb-10">
-        <a-button size="small" icon="check-square" @click="inboundUpstreamModal.nodeIds = upstreamNodes.map(node => node.id)">
+        <a-button size="small" icon="check-square" @click="inboundUpstreamModal.nodeIds = filteredUpstreamNodes.map(node => node.id)">
           全选
         </a-button>
         <a-button size="small" icon="minus-square" @click="inboundUpstreamModal.nodeIds = []">清空</a-button>
         <a-tag color="green">仅显示已启用的上游节点</a-tag>
       </a-space>
+      <a-input v-model="inboundUpstreamModal.search" allow-clear class="node-search-input mb-10"
+        placeholder="搜索节点、协议、订阅或标签"></a-input>
+      <div class="node-tag-tools" v-if="upstreamQuickTags.length">
+        <span class="tag-tools-label">自定义标签：</span>
+        <a-tag v-for="tag in upstreamQuickTags" :key="tag.label" color="blue" class="quick-node-tag">
+          [[ tag.label ]] [[ tag.nodeIds.length ]]
+          <a-divider type="vertical"></a-divider>
+          <a @click="applyNodeTag(inboundUpstreamModal, 'nodeIds', tag, true)">选择</a>
+          <a-divider type="vertical"></a-divider>
+          <a @click="applyNodeTag(inboundUpstreamModal, 'nodeIds', tag, false)">取消</a>
+        </a-tag>
+      </div>
       <div class="node-checkbox-group">
         <a-collapse :active-key="inboundUpstreamModal.activeGroupKeys"
           @change="keys => inboundUpstreamModal.activeGroupKeys = normalizeCollapseKeys(keys)" :bordered="false"
@@ -721,6 +861,7 @@
                   @change="event => setNodeSelected(inboundUpstreamModal, 'nodeIds', node.id, event.target.checked)">
                   <span class="node-name">[[ node.name ]]</span>
                   <a-tag class="ml-5" :color="node.sourceType === 'clash' ? 'purple' : 'green'">[[ node.protocol ]]</a-tag>
+                  <a-tag v-for="tag in parseNodeTags(node)" :key="tag" class="ml-5" color="geekblue">[[ tag ]]</a-tag>
                 </a-checkbox>
               </a-col>
             </a-row>
@@ -730,13 +871,112 @@
       </div>
     </a-spin>
   </a-modal>
+
+  <a-modal v-model="inboundEmergencyModal.visible" :title="'上游启用配置 - ' + inboundEmergencyModal.inboundRemark"
+    :confirm-loading="inboundEmergencyModal.saving" :class="themeSwitcher.currentTheme" width="720px"
+    @ok="submitInboundEmergencyConfig">
+    <a-spin :spinning="inboundEmergencyModal.loading" tip="加载中">
+      <a-alert type="info" show-icon message="这里选择哪些上游订阅的节点配置会跟随该入站的上游启用开关追加到下游订阅里。"
+        class="mb-10"></a-alert>
+      <a-space class="mb-10">
+        <a-button size="small" icon="check-square" @click="selectAllInboundEmergencyUpstreams">全选可用配置</a-button>
+        <a-button size="small" icon="minus-square" @click="inboundEmergencyModal.configIds = []">清空</a-button>
+      </a-space>
+      <div class="emergency-upstream-list" v-if="groupedInboundEmergencyConfigs.length">
+        <a-collapse v-model="inboundEmergencyModal.activeUpstreamKeys"
+          :bordered="false" :class="themeSwitcher.currentTheme">
+          <a-collapse-panel v-for="group in groupedInboundEmergencyConfigs" :key="group.key">
+            <template slot="header">
+              <span class="node-name">[[ group.upstreamName ]]</span>
+              <a-tag class="ml-5" :color="group.enable ? 'green' : 'red'">[[ group.enable ? '启用' : '关闭' ]]</a-tag>
+              <a-tag class="ml-5" color="blue">配置 [[ group.configs.length ]]</a-tag>
+              <a-tag class="ml-5" color="geekblue">已选 [[ selectedInboundEmergencyCount(group.configs) ]]</a-tag>
+            </template>
+            <a-space class="mb-10">
+              <a-button size="small" icon="check-square" @click.stop="selectInboundEmergencyGroup(group, true)">选择本组</a-button>
+              <a-button size="small" icon="minus-square" @click.stop="selectInboundEmergencyGroup(group, false)">取消本组</a-button>
+            </a-space>
+            <div class="emergency-config-list">
+              <a-checkbox v-for="config in group.configs" :key="config.id"
+                :checked="isInboundEmergencyUpstreamSelected(config.id)"
+                @change="event => setInboundEmergencyUpstreamSelected(config.id, event.target.checked)">
+                <span class="node-name">[[ config.name ]]</span>
+                <a-tag class="ml-5" color="blue">节点 [[ config.nodeCount ]]</a-tag>
+              </a-checkbox>
+            </div>
+          </a-collapse-panel>
+        </a-collapse>
+      </div>
+      <a-empty v-else description="暂无节点配置"></a-empty>
+    </a-spin>
+  </a-modal>
+
+  <a-modal v-model="quickConfigModal.visible" :title="'快速配置 - ' + quickConfigModal.inboundRemark"
+    :confirm-loading="quickConfigModal.saving" :class="themeSwitcher.currentTheme" width="680px"
+    @ok="submitQuickConfig">
+    <a-form layout="vertical" class="quick-config-form">
+      <a-form-item label="增加时长">
+        <a-radio-group v-model="quickConfigModal.durationPreset" button-style="solid" class="quick-config-radio-group">
+          <a-radio-button value="none">不调整</a-radio-button>
+          <a-radio-button value="1m">一个月</a-radio-button>
+          <a-radio-button value="3m">三个月</a-radio-button>
+          <a-radio-button value="6m">半年</a-radio-button>
+          <a-radio-button value="1y">一年</a-radio-button>
+          <a-radio-button value="custom">自由时长</a-radio-button>
+        </a-radio-group>
+      </a-form-item>
+      <a-form-item v-if="quickConfigModal.durationPreset !== 'none'" label="时长计算方式">
+        <a-radio-group v-model="quickConfigModal.baseMode" button-style="solid" class="quick-config-radio-group">
+          <a-radio-button value="current">以当前过期时间为基础</a-radio-button>
+          <a-radio-button value="now">以现在真实时间为基础</a-radio-button>
+        </a-radio-group>
+      </a-form-item>
+      <a-form-item v-if="quickConfigModal.durationPreset !== 'none'" label="时长处理方式">
+        <a-radio-group v-model="quickConfigModal.durationMode" button-style="solid" class="quick-config-radio-group">
+          <a-radio-button value="add">增加</a-radio-button>
+          <a-radio-button value="subtract">减少</a-radio-button>
+        </a-radio-group>
+      </a-form-item>
+      <a-form-item v-if="quickConfigModal.durationPreset === 'custom'" label="自由时长（天）">
+        <a-input-number v-model="quickConfigModal.customDays" :min="1" :max="3650" class="w-100"></a-input-number>
+      </a-form-item>
+      <a-divider orientation="left">流量配置</a-divider>
+      <a-form-item label="流量额度">
+        <a-radio-group v-model="quickConfigModal.trafficPreset" button-style="solid" class="quick-config-radio-group">
+          <a-radio-button value="none">不调整</a-radio-button>
+          <a-radio-button value="100g">100G</a-radio-button>
+          <a-radio-button value="200g">200G</a-radio-button>
+          <a-radio-button value="500g">500G</a-radio-button>
+          <a-radio-button value="1t">1T</a-radio-button>
+          <a-radio-button value="unlimited">无限</a-radio-button>
+          <a-radio-button value="custom">自定义</a-radio-button>
+        </a-radio-group>
+      </a-form-item>
+      <a-form-item v-if="quickConfigModal.trafficPreset === 'custom'" label="自定义流量（GB）">
+        <a-input-number v-model="quickConfigModal.customTrafficGb" :min="1" :max="1048576" class="w-100"></a-input-number>
+      </a-form-item>
+      <a-form-item v-if="quickConfigModal.trafficPreset !== 'none'" label="流量处理方式">
+        <a-radio-group v-model="quickConfigModal.trafficMode" button-style="solid" class="quick-config-radio-group">
+          <a-radio-button value="add">在当前总流量上增加</a-radio-button>
+          <a-radio-button value="subtract">从当前总流量中减少</a-radio-button>
+          <a-radio-button value="reset">覆盖并重置已用流量</a-radio-button>
+        </a-radio-group>
+      </a-form-item>
+      <a-divider orientation="left">设备限制</a-divider>
+      <a-form-item label="调整设备限制数量">
+        <a-input-number v-model="quickConfigModal.deviceLimitDelta" :min="quickConfigDeviceMinDelta" :max="9999"
+          class="w-100"></a-input-number>
+      </a-form-item>
+      <a-alert type="info" show-icon :message="quickConfigPreview"></a-alert>
+    </a-form>
+  </a-modal>
 </a-layout>
 {{template "page/body_scripts" .}}
-<script src="{{ .base_path }}assets/qrcode/qrious2.min.js?{{ .asset_ver }}"></script>
-<script src="{{ .base_path }}assets/uri/URI.min.js?{{ .asset_ver }}"></script>
-<script src="{{ .base_path }}assets/js/model/reality_targets.js?{{ .asset_ver }}"></script>
-<script src="{{ .base_path }}assets/js/model/inbound.js?{{ .asset_ver }}"></script>
-<script src="{{ .base_path }}assets/js/model/dbinbound.js?{{ .asset_ver }}"></script>
+<script src="{{ .base_path }}assets/qrcode/qrious2.min.js?{{ .cur_ver }}"></script>
+<script src="{{ .base_path }}assets/uri/URI.min.js?{{ .cur_ver }}"></script>
+<script src="{{ .base_path }}assets/js/model/reality_targets.js?{{ .cur_ver }}"></script>
+<script src="{{ .base_path }}assets/js/model/inbound.js?{{ .cur_ver }}-jbhd-port-1"></script>
+<script src="{{ .base_path }}assets/js/model/dbinbound.js?{{ .cur_ver }}-jbhd-today-traffic-1"></script>
 {{template "component/aSidebar" .}}
 {{template "component/aThemeSwitch" .}}
 {{template "component/aCustomStatistic" .}}
@@ -748,7 +988,7 @@
 {{template "modals/inboundInfoModal" .}}
 {{template "modals/clientsModal" .}}
 {{template "modals/clientsBulkModal" .}}
-<a-modal id="copy-clients-modal" :title="copyClientsModal.title" :visible="copyClientsModal.visible"
+<a-modal id="copy-clients-modal" v-cloak :title="copyClientsModal.title" :visible="copyClientsModal.visible"
   :confirm-loading="copyClientsModal.confirmLoading" ok-text='{{ i18n "pages.client.copySelected" }}'
   cancel-text='{{ i18n "close" }}' :class="themeSwitcher.currentTheme" :closable="true" :mask-closable="false"
   @ok="() => copyClientsModal.ok()" @cancel="() => copyClientsModal.close()" width="900px">
@@ -1005,6 +1245,13 @@
       customRender: 'enable'
     },
   }, {
+    title: '上游启用',
+    align: 'center',
+    width: 62,
+    scopedSlots: {
+      customRender: 'emergencyEnable'
+    },
+  }, {
     title: '{{ i18n "pages.inbounds.remark" }}',
     align: 'center',
     width: 60,
@@ -1022,7 +1269,7 @@
       customRender: 'protocol'
     },
   }, {
-    title: '{{ i18n "clients" }}',
+    title: '节点数',
     align: 'left',
     width: 50,
     scopedSlots: {
@@ -1036,11 +1283,11 @@
       customRender: 'deviceLimit'
     },
   }, {
-    title: '{{ i18n "pages.inbounds.traffic" }}',
+    title: inboundSortTitle('todayTraffic', '当日使用流量'),
     align: 'center',
     width: 90,
     scopedSlots: {
-      customRender: 'traffic'
+      customRender: 'todayTraffic'
     },
   }, {
     title: inboundSortTitle('allTime', '{{ i18n "pages.inbounds.allTimeTraffic" }}'),
@@ -1050,11 +1297,11 @@
       customRender: 'allTimeInbound'
     },
   }, {
-    title: inboundSortTitle('expiryTime', '{{ i18n "pages.inbounds.expireDate" }}'),
+    title: '日限额流量',
     align: 'center',
-    width: 70,
+    width: 100,
     scopedSlots: {
-      customRender: 'expiryTime'
+      customRender: 'dailyTrafficLimit'
     },
   }];
 
@@ -1165,6 +1412,63 @@
     },
   ];
 
+  const upstreamRelayNodeColumns = [{
+      title: '{{ i18n "pages.inbounds.operate" }}',
+      width: 70,
+      scopedSlots: {
+        customRender: 'relayActions'
+      }
+    },
+    {
+      title: '{{ i18n "enable" }}',
+      width: 30,
+      align: 'center',
+      scopedSlots: {
+        customRender: 'relayEnable'
+      }
+    },
+    {
+      title: '{{ i18n "online" }}',
+      width: 32,
+      align: 'center',
+      scopedSlots: {
+        customRender: 'relayOnline'
+      }
+    },
+    {
+      title: '{{ i18n "pages.inbounds.client" }}',
+      width: 120,
+      align: 'left',
+      scopedSlots: {
+        customRender: 'relayClient'
+      }
+    },
+    {
+      title: '{{ i18n "pages.inbounds.traffic" }}',
+      width: 80,
+      align: 'center',
+      scopedSlots: {
+        customRender: 'relayTraffic'
+      }
+    },
+    {
+      title: '{{ i18n "pages.inbounds.allTimeTraffic" }}',
+      width: 60,
+      align: 'center',
+      scopedSlots: {
+        customRender: 'relayAllTime'
+      }
+    },
+    {
+      title: '{{ i18n "pages.inbounds.expireDate" }}',
+      width: 80,
+      align: 'center',
+      scopedSlots: {
+        customRender: 'relayExpiry'
+      }
+    },
+  ];
+
   app = new Vue({
     delimiters: ['[[', ']]'],
     el: '#app',
@@ -1185,11 +1489,16 @@
       inboundSortKey: '',
       expireDiff: 0,
       trafficDiff: 0,
+      dailyTrafficLimitSaving: {},
       defaultCert: '',
       defaultKey: '',
       clientCount: [],
       onlineClients: [],
       lastOnlineMap: {},
+      deviceLimitIPs: {},
+      relayNodeIPs: {},
+      inboundUpstreamTrees: {},
+      inboundUpstreamTreeLoading: {},
       upstreamNodes: [],
       inboundUpstreamModal: {
         visible: false,
@@ -1198,7 +1507,32 @@
         inboundId: null,
         inboundRemark: '',
         nodeIds: [],
+        search: '',
         activeGroupKeys: [],
+      },
+      inboundEmergencyModal: {
+        visible: false,
+        loading: false,
+        saving: false,
+        inboundId: null,
+        inboundRemark: '',
+        configs: [],
+        configIds: [],
+        activeUpstreamKeys: [],
+      },
+      quickConfigModal: {
+        visible: false,
+        saving: false,
+        inboundId: null,
+        inboundRemark: '',
+        baseMode: 'current',
+        durationMode: 'add',
+        durationPreset: 'none',
+        customDays: 30,
+        trafficMode: 'add',
+        trafficPreset: 'none',
+        customTrafficGb: 100,
+        deviceLimitDelta: 0,
       },
       isRefreshEnabled: localStorage.getItem("isRefreshEnabled") === "true" ? true : false,
       refreshing: false,
@@ -1216,6 +1550,7 @@
       showAlert: false,
       ipLimitEnable: false,
       pageSize: 0,
+      upstreamRelayNodeColumns,
     },
     methods: {
       loading(spinning = true) {
@@ -1266,7 +1601,6 @@
 
         await this.getLastOnlineMap();
         await this.getOnlineUsers();
-
         this.setInbounds(msg.obj);
         setTimeout(() => {
           this.refreshing = false;
@@ -1315,11 +1649,46 @@
           this.upstreamNodes = msg.obj;
         }
       },
+      handleInboundExpand(expanded, dbInbound) {
+        if (expanded && dbInbound && dbInbound.emergencyEnable) {
+          this.loadInboundUpstreamTree(dbInbound.id);
+        }
+      },
+      prefetchInboundUpstreamTrees() {
+        for (const dbInbound of this.dbInbounds) {
+          if (dbInbound && dbInbound.emergencyEnable && !this.isInboundUpstreamTreeLoaded(dbInbound.id)) {
+            this.loadInboundUpstreamTree(dbInbound.id);
+          }
+        }
+      },
+      async loadInboundUpstreamTree(inboundId) {
+        if (!inboundId || this.inboundUpstreamTreeLoading[inboundId]) return;
+        this.$set(this.inboundUpstreamTreeLoading, inboundId, true);
+        try {
+          const msg = await HttpUtil.get(`/panel/api/subscription-market/inbounds/${inboundId}/upstream-tree`);
+          if (msg.success && msg.obj) {
+            this.$set(this.inboundUpstreamTrees, inboundId, msg.obj);
+          }
+        } finally {
+          this.$set(this.inboundUpstreamTreeLoading, inboundId, false);
+        }
+      },
+      getInboundUpstreamGroups(inboundId) {
+        const tree = this.inboundUpstreamTrees[inboundId] || this.inboundUpstreamTrees[String(inboundId)];
+        return tree && Array.isArray(tree.upstreams) ? tree.upstreams : [];
+      },
+      isInboundUpstreamTreeLoading(inboundId) {
+        return !!(this.inboundUpstreamTreeLoading[inboundId] || this.inboundUpstreamTreeLoading[String(inboundId)]);
+      },
+      isInboundUpstreamTreeLoaded(inboundId) {
+        return !!(this.inboundUpstreamTrees[inboundId] || this.inboundUpstreamTrees[String(inboundId)]);
+      },
       async openInboundUpstreamNodes(dbInbound) {
         if (!dbInbound) return;
         this.inboundUpstreamModal.inboundId = dbInbound.id;
         this.inboundUpstreamModal.inboundRemark = dbInbound.remark || `ID ${dbInbound.id}`;
         this.inboundUpstreamModal.nodeIds = [];
+        this.inboundUpstreamModal.search = '';
         this.inboundUpstreamModal.activeGroupKeys = [];
         this.inboundUpstreamModal.loading = true;
         this.inboundUpstreamModal.visible = true;
@@ -1347,6 +1716,96 @@
           }
         } finally {
           this.inboundUpstreamModal.saving = false;
+        }
+      },
+      async openInboundEmergencyConfig(dbInbound) {
+        if (!dbInbound) return;
+        this.inboundEmergencyModal.inboundId = dbInbound.id;
+        this.inboundEmergencyModal.inboundRemark = dbInbound.remark || `ID ${dbInbound.id}`;
+        this.inboundEmergencyModal.configs = [];
+        this.inboundEmergencyModal.configIds = [];
+        this.inboundEmergencyModal.activeUpstreamKeys = [];
+        this.inboundEmergencyModal.loading = true;
+        this.inboundEmergencyModal.visible = true;
+        try {
+          const configMsg = await HttpUtil.get('/panel/api/subscription-market/node-configs/list');
+          if (configMsg.success && Array.isArray(configMsg.obj)) {
+            this.inboundEmergencyModal.configs = configMsg.obj;
+            this.inboundEmergencyModal.activeUpstreamKeys = this.buildInboundEmergencyGroupKeys(configMsg.obj);
+          }
+          const selectedMsg = await HttpUtil.get(`/panel/api/subscription-market/inbounds/${dbInbound.id}/upstream-configs`);
+          if (selectedMsg.success && Array.isArray(selectedMsg.obj)) {
+            this.inboundEmergencyModal.configIds = selectedMsg.obj.slice();
+          }
+        } finally {
+          this.inboundEmergencyModal.loading = false;
+        }
+      },
+      isInboundEmergencyUpstreamSelected(configId) {
+        return Array.isArray(this.inboundEmergencyModal.configIds) &&
+          this.inboundEmergencyModal.configIds.includes(configId);
+      },
+      setInboundEmergencyUpstreamSelected(configId, checked) {
+        const selected = new Set(Array.isArray(this.inboundEmergencyModal.configIds) ?
+          this.inboundEmergencyModal.configIds : []);
+        if (checked) {
+          selected.add(configId);
+        } else {
+          selected.delete(configId);
+        }
+        this.$set(this.inboundEmergencyModal, 'configIds', Array.from(selected));
+      },
+      selectAllInboundEmergencyUpstreams() {
+        const ids = this.inboundEmergencyUpstreamOptions
+          .filter(config => config.enable && config.nodeCount > 0)
+          .map(config => config.id);
+        this.$set(this.inboundEmergencyModal, 'configIds', ids);
+      },
+      selectInboundEmergencyGroup(group, checked) {
+        if (!group || !Array.isArray(group.configs)) return;
+        const selected = new Set(Array.isArray(this.inboundEmergencyModal.configIds) ?
+          this.inboundEmergencyModal.configIds : []);
+        for (const config of group.configs) {
+          if (!config.enable || config.nodeCount <= 0) continue;
+          if (checked) {
+            selected.add(config.id);
+          } else {
+            selected.delete(config.id);
+          }
+        }
+        this.$set(this.inboundEmergencyModal, 'configIds', Array.from(selected));
+      },
+      selectedInboundEmergencyCount(configs) {
+        if (!Array.isArray(configs)) return 0;
+        return configs.filter(config => this.isInboundEmergencyUpstreamSelected(config.id)).length;
+      },
+      buildInboundEmergencyGroupKeys(configs) {
+        const keys = [];
+        const seen = new Set();
+        for (const config of Array.isArray(configs) ? configs : []) {
+          const key = String(config.upstreamId || 0);
+          if (seen.has(key)) continue;
+          seen.add(key);
+          keys.push(key);
+        }
+        return keys;
+      },
+      async submitInboundEmergencyConfig() {
+        if (!this.inboundEmergencyModal.inboundId) return;
+        this.inboundEmergencyModal.saving = true;
+        try {
+          const msg = await HttpUtil.post(
+            `/panel/api/subscription-market/inbounds/${this.inboundEmergencyModal.inboundId}/upstream-configs`, {
+              configIds: this.inboundEmergencyModal.configIds
+            });
+          if (msg.success) {
+            this.$message.success('已保存');
+            this.$delete(this.inboundUpstreamTrees, this.inboundEmergencyModal.inboundId);
+            await this.loadInboundUpstreamTree(this.inboundEmergencyModal.inboundId);
+            this.inboundEmergencyModal.visible = false;
+          }
+        } finally {
+          this.inboundEmergencyModal.saving = false;
         }
       },
       isNodeSelected(selectedIds, nodeId) {
@@ -1393,13 +1852,79 @@
         if (keys === undefined || keys === null || keys === '') return [];
         return [String(keys)];
       },
+      parseNodeTags(node) {
+        if (!node) return [];
+        if (Array.isArray(node.tags)) {
+          return node.tags.map(tag => String(tag || '').trim()).filter(Boolean);
+        }
+        const raw = String(node.tags || '').trim();
+        if (!raw) return [];
+        try {
+          const parsed = JSON.parse(raw);
+          if (Array.isArray(parsed)) {
+            return parsed.map(tag => String(tag || '').trim()).filter(Boolean);
+          }
+        } catch (e) {}
+        return raw.split(/[,\s，;；]+/).map(tag => tag.trim()).filter(Boolean);
+      },
+      filterNodes(nodes, keyword) {
+        const source = Array.isArray(nodes) ? nodes : [];
+        const query = String(keyword || '').trim().toLowerCase();
+        if (!query) return source;
+        return source.filter(node => {
+          const haystack = [
+            node.name,
+            node.protocol,
+            node.sourceType,
+            node.upstreamName,
+            this.parseNodeTags(node).join(' '),
+          ].join(' ').toLowerCase();
+          return haystack.includes(query);
+        });
+      },
+      buildNodeQuickTags(nodes) {
+        const source = Array.isArray(nodes) ? nodes : [];
+        const tags = {};
+        for (const node of source) {
+          for (const tag of this.parseNodeTags(node)) {
+            const key = tag.toLowerCase();
+            if (!tags[key]) {
+              tags[key] = {
+                label: tag,
+                nodeIds: [],
+              };
+            }
+            tags[key].nodeIds.push(node.id);
+          }
+        }
+        return Object.keys(tags)
+          .map(key => tags[key])
+          .sort((a, b) => a.label.localeCompare(b.label, 'zh-CN'));
+      },
+      applyNodeTag(target, key, tag, checked) {
+        const selected = new Set(Array.isArray(target[key]) ? target[key] : []);
+        for (const id of tag.nodeIds || []) {
+          if (checked) {
+            selected.add(id);
+          } else {
+            selected.delete(id);
+          }
+        }
+        this.$set(target, key, Array.from(selected));
+      },
       setInbounds(dbInbounds) {
+        const emergencyStateById = new Map(this.dbInbounds.map(inbound => [Number(inbound.id), !!inbound.emergencyEnable]));
         this.inbounds.splice(0);
         this.dbInbounds.splice(0);
         this.clientCount.splice(0);
         const sortedDbInbounds = (dbInbounds || []).slice().sort((a, b) => Number(b.id || 0) - Number(a.id || 0));
         for (const inbound of sortedDbInbounds) {
           const dbInbound = new DBInbound(inbound);
+          dbInbound.dailyTrafficLimit = this.getInboundDailyTrafficLimit(inbound);
+          if (inbound && inbound.emergencyEnable === undefined && inbound.emergency_enable === undefined &&
+            emergencyStateById.has(Number(dbInbound.id))) {
+            dbInbound.emergencyEnable = emergencyStateById.get(Number(dbInbound.id));
+          }
           normalizeInboundSocksProxyFields(dbInbound, inbound);
           to_inbound = dbInbound.toInbound()
           this.inbounds.push(to_inbound);
@@ -1420,6 +1945,7 @@
         } else {
           this.searchInbounds(this.searchKey);
         }
+        this.prefetchInboundUpstreamTrees();
       },
       getClientCounts(dbInbound, inbound) {
         let clientCount = 0,
@@ -1548,9 +2074,8 @@
           if (sortKey === 'allTime') {
             return Number(dbInbound.allTime || 0);
           }
-          if (sortKey === 'expiryTime') {
-            const expiryTime = Number(dbInbound.expiryTime || 0);
-            return expiryTime === 0 ? Number.MAX_SAFE_INTEGER : expiryTime;
+          if (sortKey === 'todayTraffic') {
+            return Number(dbInbound.todayTraffic || 0);
           }
           return 0;
         };
@@ -1619,9 +2144,6 @@
           case "clipboard":
             this.copy(dbInbound.id);
             break;
-          case "upstreamNodes":
-            this.openInboundUpstreamNodes(dbInbound);
-            break;
           case "resetTraffic":
             this.resetTraffic(dbInbound.id);
             break;
@@ -1655,6 +2177,9 @@
         });
       },
       async cloneInbound(baseInbound, dbInbound) {
+        const port = this.randomInboundPort();
+        const settings = Inbound.Settings.getSettings(baseInbound.protocol);
+        this.applyDefaultInboundClientEmail(baseInbound.protocol, settings, port, true);
         const data = {
           up: dbInbound.up,
           down: dbInbound.down,
@@ -1662,7 +2187,9 @@
           remark: dbInbound.remark + " - Cloned",
           enable: dbInbound.enable,
           expiryTime: dbInbound.expiryTime,
+          dailyTrafficLimit: dbInbound.dailyTrafficLimit,
           deviceLimit: dbInbound.deviceLimit,
+          emergencyEnable: dbInbound.emergencyEnable,
           trafficReset: dbInbound.trafficReset,
           lastTrafficResetTime: dbInbound.lastTrafficResetTime,
           socksProxyEnabled: dbInbound.socksProxyEnabled,
@@ -1672,9 +2199,9 @@
           socksProxyPassword: dbInbound.socksProxyPassword,
 
           listen: '',
-          port: RandomUtil.randomInteger(10000, 60000),
+          port: port,
           protocol: baseInbound.protocol,
-          settings: Inbound.Settings.getSettings(baseInbound.protocol).toString(),
+          settings: settings.toString(),
           streamSettings: baseInbound.stream.toString(),
           sniffing: baseInbound.sniffing.toString(),
         };
@@ -1690,6 +2217,41 @@
           },
           isEdit: false
         });
+        this.applyDefaultInboundClientEmail(inModal.inbound.protocol, inModal.inbound.settings, inModal.inbound.port, true);
+      },
+      randomInboundPort() {
+        return RandomUtil.randomInteger(10000, 19999);
+      },
+      defaultInboundClientEmail(port) {
+        return `高速节点-V${port}`;
+      },
+      isAutoInboundClientEmail(email) {
+        const value = String(email || '').trim();
+        return !value || /^高速节点-V\d+$/.test(value) || /^[a-z0-9]{8,9}$/.test(value);
+      },
+      getSettingsClients(protocol, settings) {
+        if (!settings) return null;
+        switch (protocol) {
+          case Protocols.VMESS:
+            return settings.vmesses;
+          case Protocols.VLESS:
+            return settings.vlesses;
+          case Protocols.TROJAN:
+            return settings.trojans;
+          case Protocols.SHADOWSOCKS:
+            return settings.shadowsockses;
+          case Protocols.HYSTERIA:
+            return settings.hysterias;
+          default:
+            return null;
+        }
+      },
+      applyDefaultInboundClientEmail(protocol, settings, port, force = false) {
+        const clients = this.getSettingsClients(protocol, settings);
+        if (!Array.isArray(clients) || clients.length === 0 || !port) return;
+        if (force || this.isAutoInboundClientEmail(clients[0].email)) {
+          clients[0].email = this.defaultInboundClientEmail(port);
+        }
       },
       openEditInbound(dbInboundId) {
         dbInbound = this.dbInbounds.find(row => row.id === dbInboundId);
@@ -1706,11 +2268,29 @@
           isEdit: true
         });
       },
+      buildInboundFormData(data) {
+        const formData = new FormData();
+        Object.keys(data).forEach(key => {
+          const value = data[key];
+          if (value === undefined || value === null) return;
+          if (typeof value === 'boolean') {
+            formData.append(key, value ? 'true' : 'false');
+            return;
+          }
+          if (typeof value === 'number' && Number.isNaN(value)) {
+            formData.append(key, '');
+            return;
+          }
+          formData.append(key, value);
+        });
+        return formData;
+      },
       async addInbound(inbound, dbInbound) {
+        this.applyDefaultInboundClientEmail(inbound.protocol, inbound.settings, inbound.port);
         const existingIds = new Set(this.dbInbounds.map(row => Number(row.id)));
-        const pendingVmessLink = this.getFirstVmessLinkFromInbound(inbound, dbInbound.remark);
-        const pendingVmessCopy = pendingVmessLink ?
-          ClipboardManager.copyText(pendingVmessLink) :
+        const pendingShareLink = this.getFirstShareLinkFromInbound(inbound, dbInbound.remark);
+        const pendingShareCopy = pendingShareLink ?
+          ClipboardManager.copyText(pendingShareLink) :
           Promise.resolve(false);
         const data = {
           up: dbInbound.up,
@@ -1719,7 +2299,9 @@
           remark: dbInbound.remark,
           enable: dbInbound.enable,
           expiryTime: dbInbound.expiryTime,
+          dailyTrafficLimit: dbInbound.dailyTrafficLimit,
           deviceLimit: dbInbound.deviceLimit,
+          emergencyEnable: dbInbound.emergencyEnable,
           trafficReset: dbInbound.trafficReset,
           lastTrafficResetTime: dbInbound.lastTrafficResetTime,
           socksProxyEnabled: dbInbound.socksProxyEnabled,
@@ -1744,7 +2326,7 @@
 
         const msg = await this.submit('/panel/api/inbounds/add', data, inModal);
         if (msg.success) {
-          await this.finishCreatedVmessCopy(existingIds, data, pendingVmessCopy, pendingVmessLink);
+          await this.finishCreatedShareCopy(existingIds, data, pendingShareCopy, pendingShareLink);
         }
       },
       async updateInbound(inbound, dbInbound) {
@@ -1778,10 +2360,9 @@
         }
         data.sniffing = inbound.sniffing.toString();
 
-        const formData = new FormData();
-        Object.keys(data).forEach(key => formData.append(key, data[key]));
+        const formData = this.buildInboundFormData(data);
 
-        await this.submit(`/panel/api/inbounds/update/${dbInbound.id}`, formData, inModal);
+        return await this.submit(`/panel/api/inbounds/update/${dbInbound.id}`, formData, inModal);
       },
       openAddClient(dbInboundId) {
         dbInbound = this.dbInbounds.find(row => row.id === dbInboundId);
@@ -1976,7 +2557,60 @@
         newDbInbound = this.checkFallback(dbInbound);
         infoModal.show(newDbInbound, index);
       },
-      switchEnable(dbInboundId, state) {
+      showRelayNodeQrcode(node) {
+        if (!node || !node.relayLink) return;
+        qrModal.title = '{{ i18n "qrCode"}}';
+        qrModal.dbInbound = new DBInbound();
+        qrModal.inbound = {
+          protocol: ''
+        };
+        qrModal.client = null;
+        qrModal.subId = '';
+        qrModal.qrcodes = [{
+          remark: node.name,
+          link: node.relayLink,
+          useIPv4: false,
+          originalLink: node.relayLink
+        }];
+        if (qrModalApp) qrModalApp.statusFetched = false;
+        qrModal.visible = true;
+      },
+      async toggleRelayNode(inboundId, node, checked) {
+        if (!node) return;
+        const previous = node.enable;
+        node.enable = checked;
+        const msg = await HttpUtil.post(`/panel/api/subscription-market/nodes/toggle/${node.nodeId}`, {
+          enable: checked
+        });
+        if (!msg.success) {
+          node.enable = previous;
+          return;
+        }
+        await this.loadInboundUpstreamTree(inboundId);
+      },
+      resetRelayNodeTraffic(inboundId, node, confirmation = true) {
+        if (!node) return;
+        const reset = async () => {
+          const msg = await HttpUtil.post(`/panel/api/subscription-market/inbounds/${inboundId}/relay-nodes/${node.nodeId}/reset`);
+          if (msg.success) {
+            await this.loadInboundUpstreamTree(inboundId);
+            await this.getDBInbounds();
+          }
+        };
+        if (confirmation) {
+          this.$confirm({
+            title: '{{ i18n "pages.inbounds.resetTraffic"}}' + ' ' + node.name,
+            content: '{{ i18n "pages.inbounds.resetTrafficContent"}}',
+            class: themeSwitcher.currentTheme,
+            okText: '{{ i18n "reset"}}',
+            cancelText: '{{ i18n "cancel"}}',
+            onOk: reset,
+          });
+        } else {
+          reset();
+        }
+      },
+      async switchEnable(dbInboundId, state) {
         let dbInbound = this.dbInbounds.find(row => row.id === dbInboundId);
         if (!dbInbound) return;
         dbInbound.enable = state;
@@ -1988,8 +2622,14 @@
           remark: dbInbound.remark,
           enable: dbInbound.enable,
           expiryTime: dbInbound.expiryTime,
+          deviceLimit: dbInbound.deviceLimit,
           trafficReset: dbInbound.trafficReset,
           lastTrafficResetTime: dbInbound.lastTrafficResetTime,
+          socksProxyEnabled: dbInbound.socksProxyEnabled,
+          socksProxyHost: dbInbound.socksProxyHost,
+          socksProxyPort: dbInbound.socksProxyPort,
+          socksProxyUsername: dbInbound.socksProxyUsername,
+          socksProxyPassword: dbInbound.socksProxyPassword,
 
           listen: inbound.listen,
           port: inbound.port,
@@ -2005,10 +2645,179 @@
         }
         data.sniffing = inbound.sniffing.toString();
 
-        const formData = new FormData();
-        Object.keys(data).forEach(key => formData.append(key, data[key]));
+        const formData = this.buildInboundFormData(data);
 
-        this.submit(`/panel/api/inbounds/update/${dbInboundId}`, formData);
+        await this.submit(`/panel/api/inbounds/update/${dbInboundId}`, formData);
+      },
+      async toggleInboundEmergency(dbInbound, checked) {
+        const previous = !!dbInbound.emergencyEnable;
+        const next = checked === true || checked === 1 || checked === '1' || checked === 'true' || checked === 'on';
+        this.$set(dbInbound, 'emergencyEnable', next);
+        const formData = new FormData();
+        formData.append('enable', next ? 'true' : 'false');
+        const msg = await HttpUtil.post(`/panel/api/subscription-market/inbounds/${dbInbound.id}/emergency`, formData);
+        if (msg.success) {
+          this.$delete(this.inboundUpstreamTrees, dbInbound.id);
+          if (next) {
+            await this.loadInboundUpstreamTree(dbInbound.id);
+          }
+          await this.getDBInbounds();
+        } else {
+          this.$set(dbInbound, 'emergencyEnable', previous);
+        }
+      },
+      async updateInboundDailyTrafficLimit(dbInbound, value) {
+        if (!dbInbound) return;
+        const previous = Number(dbInbound.dailyTrafficLimit || 0);
+        const next = Number(value || 0);
+        if (previous === next) return;
+
+        this.$set(this.dailyTrafficLimitSaving, dbInbound.id, true);
+        this.$set(dbInbound, 'dailyTrafficLimit', next);
+        const formData = new FormData();
+        formData.append('dailyTrafficLimit', String(next));
+        try {
+          const msg = await HttpUtil.post(`/panel/api/inbounds/${dbInbound.id}/dailyTrafficLimit`, formData);
+          if (!msg.success) {
+            this.$set(dbInbound, 'dailyTrafficLimit', previous);
+            return;
+          }
+          await this.getDBInbounds();
+        } finally {
+          this.$delete(this.dailyTrafficLimitSaving, dbInbound.id);
+        }
+      },
+      getInboundDailyTrafficLimit(dbInbound) {
+        const raw = dbInbound && dbInbound.dailyTrafficLimit;
+        if (raw === undefined || raw === null || raw === '') {
+          return 10 * SizeFormatter.ONE_GB;
+        }
+        const limit = Number(raw);
+        return Number.isFinite(limit) && limit >= 0 ? limit : 10 * SizeFormatter.ONE_GB;
+      },
+      openQuickConfigModal(dbInbound) {
+        if (!dbInbound) return;
+        this.quickConfigModal.inboundId = dbInbound.id;
+        this.quickConfigModal.inboundRemark = dbInbound.remark || `ID ${dbInbound.id}`;
+        this.quickConfigModal.baseMode = dbInbound.expiryTime > 0 ? 'current' : 'now';
+        this.quickConfigModal.durationMode = 'add';
+        this.quickConfigModal.durationPreset = 'none';
+        this.quickConfigModal.customDays = 30;
+        this.quickConfigModal.trafficMode = 'add';
+        this.quickConfigModal.trafficPreset = 'none';
+        this.quickConfigModal.customTrafficGb = 100;
+        this.quickConfigModal.deviceLimitDelta = 0;
+        this.quickConfigModal.visible = true;
+      },
+      calculateQuickExpiry() {
+        const modal = this.quickConfigModal;
+        const dbInbound = this.dbInbounds.find(row => row.id === modal.inboundId);
+        if (!dbInbound) return 0;
+        if (modal.durationPreset === 'none') return Number(dbInbound.expiryTime || 0);
+        const now = Date.now();
+        let base = modal.baseMode === 'current' && dbInbound.expiryTime > 0 ? Number(dbInbound.expiryTime) : now;
+        let result = moment(base);
+        const action = modal.durationMode === 'subtract' ? 'subtract' : 'add';
+        switch (modal.durationPreset) {
+          case '1m':
+            result = result[action](1, 'month');
+            break;
+          case '3m':
+            result = result[action](3, 'month');
+            break;
+          case '6m':
+            result = result[action](6, 'month');
+            break;
+          case '1y':
+            result = result[action](1, 'year');
+            break;
+          case 'custom':
+            result = result[action](Number(modal.customDays || 1), 'day');
+            break;
+        }
+        return result.valueOf();
+      },
+      quickTrafficBytes() {
+        const modal = this.quickConfigModal;
+        switch (modal.trafficPreset) {
+          case '100g':
+            return 100 * SizeFormatter.ONE_GB;
+          case '200g':
+            return 200 * SizeFormatter.ONE_GB;
+          case '500g':
+            return 500 * SizeFormatter.ONE_GB;
+          case '1t':
+            return SizeFormatter.ONE_TB;
+          case 'unlimited':
+            return 0;
+          case 'custom':
+            return Math.max(1, Number(modal.customTrafficGb || 1)) * SizeFormatter.ONE_GB;
+          default:
+            return null;
+        }
+      },
+      calculateQuickTrafficTotal(dbInbound) {
+        const bytes = this.quickTrafficBytes();
+        if (bytes === null) return null;
+        if (bytes === 0) return 0;
+        const current = Math.max(0, Number(dbInbound.total || 0));
+        if (this.quickConfigModal.trafficMode === 'subtract') {
+          if (current <= 0) return 1;
+          return Math.max(1, current - bytes);
+        }
+        if (this.quickConfigModal.trafficMode === 'reset') {
+          return bytes;
+        }
+        return current + bytes;
+      },
+      calculateQuickDeviceLimit(dbInbound) {
+        const current = Math.max(1, Number(dbInbound.deviceLimit || 1));
+        const delta = Number(this.quickConfigModal.deviceLimitDelta || 0);
+        return Math.max(1, current + delta);
+      },
+      formatTrafficLimit(value) {
+        return Number(value || 0) > 0 ? SizeFormatter.sizeFormat(Number(value || 0)) : '无限';
+      },
+      async submitQuickConfig() {
+        const dbInbound = this.dbInbounds.find(row => row.id === this.quickConfigModal.inboundId);
+        if (!dbInbound) return;
+        this.quickConfigModal.saving = true;
+        const previous = {
+          expiryTime: dbInbound.expiryTime,
+          total: dbInbound.total,
+          up: dbInbound.up,
+          down: dbInbound.down,
+          deviceLimit: dbInbound.deviceLimit,
+        };
+        try {
+          const inbound = dbInbound.toInbound();
+          const trafficTotal = this.calculateQuickTrafficTotal(dbInbound);
+          const deviceDelta = Number(this.quickConfigModal.deviceLimitDelta || 0);
+          const hasChanges = this.quickConfigModal.durationPreset !== 'none' || trafficTotal !== null || deviceDelta !== 0;
+          if (!hasChanges) {
+            this.quickConfigModal.visible = false;
+            return;
+          }
+          if (this.quickConfigModal.durationPreset !== 'none') {
+            dbInbound.expiryTime = this.calculateQuickExpiry();
+          }
+          if (trafficTotal !== null) {
+            dbInbound.total = trafficTotal;
+            if (this.quickConfigModal.trafficMode === 'reset') {
+              dbInbound.up = 0;
+              dbInbound.down = 0;
+            }
+          }
+          dbInbound.deviceLimit = this.calculateQuickDeviceLimit(dbInbound);
+          const msg = await this.updateInbound(inbound, dbInbound);
+          if (msg && msg.success) {
+            this.quickConfigModal.visible = false;
+          } else {
+            Object.assign(dbInbound, previous);
+          }
+        } finally {
+          this.quickConfigModal.saving = false;
+        }
       },
       async switchEnableClient(dbInboundId, client, state) {
         this.loading();
@@ -2037,13 +2846,13 @@
         }
         return msg;
       },
-      getFirstVmessLinkFromInbound(inbound, remark) {
-        if (!inbound || inbound.protocol !== Protocols.VMESS) {
+      getFirstShareLinkFromInbound(inbound, remark) {
+        if (!inbound) {
           return "";
         }
         return (inbound.genInboundLinks(remark, this.remarkModel) || "")
           .split(/\r?\n/)
-          .find(link => link.startsWith("vmess://")) || "";
+          .find(link => link.length > 0) || "";
       },
       findCreatedInbound(existingIds, data) {
         const addedInbounds = this.dbInbounds
@@ -2058,23 +2867,20 @@
           .filter(row => row.protocol === data.protocol && Number(row.port) === port)
           .sort((a, b) => Number(b.id || 0) - Number(a.id || 0))[0] || null;
       },
-      async finishCreatedVmessCopy(existingIds, data, pendingVmessCopy, pendingVmessLink) {
-        if (data.protocol !== Protocols.VMESS) {
-          return;
-        }
-        if (await pendingVmessCopy) {
+      async finishCreatedShareCopy(existingIds, data, pendingShareCopy, pendingShareLink) {
+        if (await pendingShareCopy) {
           this.$message.success('{{ i18n "copied" }}');
           return;
         }
         const dbInbound = this.findCreatedInbound(existingIds, data);
         const links = dbInbound ? this.checkFallback(dbInbound).genInboundLinks(this.remarkModel) : "";
-        const vmessLink = (links || "")
+        const shareLink = (links || "")
           .split(/\r?\n/)
-          .find(link => link.startsWith("vmess://")) || pendingVmessLink;
-        if (!vmessLink) {
+          .find(link => link.length > 0) || pendingShareLink;
+        if (!shareLink) {
           return;
         }
-        if (await ClipboardManager.copyText(vmessLink)) {
+        if (await ClipboardManager.copyText(shareLink)) {
           this.$message.success('{{ i18n "copied" }}');
         } else {
           this.$message.warning('自动复制失败，请手动复制链接');
@@ -2246,6 +3052,157 @@
         // Fallback to simple date formatting if IntlUtil is not available
         return new Date(ts).toLocaleString()
       },
+      getDeviceLimitIPs(dbInbound) {
+        if (!dbInbound || !this.deviceLimitIPs) return [];
+        const list = this.deviceLimitIPs[dbInbound.id] || this.deviceLimitIPs[String(dbInbound.id)] || [];
+        return Array.isArray(list) ? list : [];
+      },
+      deviceLimitActiveCount(dbInbound) {
+        return this.getDeviceLimitIPs(dbInbound).length;
+      },
+      relayNodeKey(inboundId, node) {
+        const nodeId = node && (node.nodeId || node.id);
+        return `${inboundId}:${nodeId}`;
+      },
+      getRelayNodeIPs(inboundId, node) {
+        if (!this.relayNodeIPs) return [];
+        const key = this.relayNodeKey(inboundId, node);
+        const list = this.relayNodeIPs[key] || [];
+        return Array.isArray(list) ? list : [];
+      },
+      relayNodeActiveCount(inboundId, node) {
+        return this.getRelayNodeIPs(inboundId, node).length;
+      },
+      relayIPClients(item) {
+        const clients = item && Array.isArray(item.clients) ? item.clients : [];
+        return [...new Set(clients.filter(Boolean))];
+      },
+      relayIPClientsText(item) {
+        const clients = this.relayIPClients(item);
+        return clients.length ? clients.join(', ') : '-';
+      },
+      relayNodeClientCount(inboundId, node) {
+        const clients = new Set();
+        this.getRelayNodeIPs(inboundId, node).forEach(item => {
+          this.relayIPClients(item).forEach(email => clients.add(email));
+        });
+        return clients.size;
+      },
+      relayNodeUsed(node) {
+        return Number(node?.up || 0) + Number(node?.down || 0);
+      },
+      relayIDsFromTrafficTag(tag) {
+        const matched = String(tag || '').match(/^xui-relay-in-(\d+)-node-(\d+)$/);
+        if (!matched) return null;
+        return {
+          inboundId: Number(matched[1]),
+          nodeId: Number(matched[2]),
+        };
+      },
+      applyRelayTrafficDeltas(traffics) {
+        if (!Array.isArray(traffics) || traffics.length === 0) return;
+        let touched = false;
+        traffics.forEach(traffic => {
+          const ids = this.relayIDsFromTrafficTag(traffic?.Tag ?? traffic?.tag);
+          if (!ids) return;
+          const up = Number(traffic?.Up ?? traffic?.up ?? 0);
+          const down = Number(traffic?.Down ?? traffic?.down ?? 0);
+          if (up === 0 && down === 0) return;
+          const tree = this.inboundUpstreamTrees[ids.inboundId] || this.inboundUpstreamTrees[String(ids.inboundId)];
+          if (!tree || !Array.isArray(tree.upstreams)) return;
+          tree.upstreams.forEach(group => {
+            (group.configs || []).forEach(config => {
+              (config.nodes || []).forEach(node => {
+                if (Number(node.nodeId) !== ids.nodeId) return;
+                this.$set(node, 'up', Number(node.up || 0) + up);
+                this.$set(node, 'down', Number(node.down || 0) + down);
+                this.$set(node, 'allTime', Number(node.allTime || 0) + up + down);
+                this.$set(config, 'up', Number(config.up || 0) + up);
+                this.$set(config, 'down', Number(config.down || 0) + down);
+                this.$set(config, 'allTime', Number(config.allTime || 0) + up + down);
+                this.$set(group, 'up', Number(group.up || 0) + up);
+                this.$set(group, 'down', Number(group.down || 0) + down);
+                this.$set(group, 'allTime', Number(group.allTime || 0) + up + down);
+                touched = true;
+              });
+            });
+          });
+        });
+        if (touched) {
+          if (this.enableFilter) {
+            this.filterInbounds();
+          } else {
+            this.searchInbounds(this.searchKey);
+          }
+        }
+      },
+      relayConfigNodeCount(config) {
+        return Number(config?.nodeCount || (Array.isArray(config?.nodes) ? config.nodes.length : 0));
+      },
+      relayConfigUsed(config) {
+        return Number(config?.up || 0) + Number(config?.down || 0);
+      },
+      relayConfigActiveCount(inboundId, config) {
+        return (config?.nodes || []).reduce((sum, node) => sum + this.relayNodeActiveCount(inboundId, node), 0);
+      },
+      relayGroupNodeCount(group) {
+        if (Number(group?.nodeCount || 0) > 0) return Number(group.nodeCount || 0);
+        return (group?.configs || []).reduce((sum, config) => sum + this.relayConfigNodeCount(config), 0);
+      },
+      relayGroupUsed(group) {
+        return Number(group?.up || 0) + Number(group?.down || 0);
+      },
+      relayGroupActiveCount(inboundId, group) {
+        return (group?.configs || []).reduce((sum, config) => sum + this.relayConfigActiveCount(inboundId, config), 0);
+      },
+      relayTotalNodeCount(inboundId) {
+        return this.getInboundUpstreamGroups(inboundId).reduce((sum, group) => sum + this.relayGroupNodeCount(group), 0);
+      },
+      relayTotalActiveCount(inboundId) {
+        return this.getInboundUpstreamGroups(inboundId).reduce((sum, group) => sum + this.relayGroupActiveCount(inboundId, group), 0);
+      },
+      inboundDisplayClientCount(dbInbound) {
+        if (!dbInbound || !this.clientCount[dbInbound.id]) return 0;
+        return Number(this.clientCount[dbInbound.id].clients || 0) + this.relayTotalNodeCount(dbInbound.id);
+      },
+      inboundDisplayOnlineCount(dbInbound) {
+        if (!dbInbound || !this.clientCount[dbInbound.id]) return 0;
+        return Number(this.clientCount[dbInbound.id].online.length || 0) + this.relayTotalActiveCount(dbInbound.id);
+      },
+      getInboundRelayActiveRows(inboundId) {
+        const rows = [];
+        this.getInboundUpstreamGroups(inboundId).forEach(group => {
+          (group.configs || []).forEach(config => {
+            (config.nodes || []).forEach(node => {
+              this.getRelayNodeIPs(inboundId, node).forEach(item => {
+                rows.push({
+                  key: `${inboundId}:${node.nodeId}:${item.ip}`,
+                  nodeName: node.name,
+                  ip: item.ip,
+                  clientsText: this.relayIPClientsText(item),
+                });
+              });
+            });
+          });
+        });
+        return rows;
+      },
+      relayNodeBadgeColor(inboundId, node) {
+        if (!node || !node.enable) {
+          return this.themeSwitcher.isDarkTheme ? '#2c3950' : '#bcbcbc';
+        }
+        if (this.relayNodeActiveCount(inboundId, node) > 0) {
+          return '#008771';
+        }
+        return '#7a316f';
+      },
+      formatDeviceLimitSeen(ts) {
+        if (!ts) return '-';
+        if (typeof IntlUtil !== 'undefined' && IntlUtil.formatDate) {
+          return IntlUtil.formatDate(ts);
+        }
+        return new Date(ts).toLocaleString();
+      },
       isRemovable(dbInboundId) {
         return this.getInboundClients(this.dbInbounds.find(row => row.id === dbInboundId)).length > 1;
       },
@@ -2414,6 +3371,9 @@
           // Note: Do NOT update total consumed traffic (stats.up, stats.down) from this event
           // because clientTraffics contains delta/incremental values, not total accumulated values.
           // Total traffic is updated via the 'inbounds' WebSocket event (or 'invalidate' fallback for large panels).
+          if (payload && Array.isArray(payload.traffics)) {
+            this.applyRelayTrafficDeltas(payload.traffics);
+          }
 
           // Update online clients list in real-time
           if (payload && Array.isArray(payload.onlineClients)) {
@@ -2453,6 +3413,14 @@
           if (payload && payload.lastOnlineMap && typeof payload.lastOnlineMap === 'object') {
             this.lastOnlineMap = payload.lastOnlineMap;
           }
+
+          if (payload && payload.deviceLimitIPs && typeof payload.deviceLimitIPs === 'object') {
+            this.deviceLimitIPs = payload.deviceLimitIPs;
+          }
+
+          if (payload && payload.relayNodeIPs && typeof payload.relayNodeIPs === 'object') {
+            this.relayNodeIPs = payload.relayNodeIPs;
+          }
         });
 
         // Fallback to polling if WebSocket fails
@@ -2484,15 +3452,21 @@
           up = 0,
           allTime = 0;
         let clients = 0,
+          inbounds = 0,
+          activeInbounds = 0,
           deactive = [],
           depleted = [],
           expiring = [];
         this.dbInbounds.forEach(dbInbound => {
+          inbounds += 1;
           down += dbInbound.down;
           up += dbInbound.up;
           allTime += (dbInbound.allTime || (dbInbound.up + dbInbound.down));
+          if (this.inboundDisplayOnlineCount(dbInbound) > 0) {
+            activeInbounds += 1;
+          }
           if (this.clientCount[dbInbound.id]) {
-            clients += this.clientCount[dbInbound.id].clients;
+            clients += this.inboundDisplayClientCount(dbInbound);
             deactive = deactive.concat(this.clientCount[dbInbound.id].deactive);
             depleted = depleted.concat(this.clientCount[dbInbound.id].depleted);
             expiring = expiring.concat(this.clientCount[dbInbound.id].expiring);
@@ -2503,14 +3477,51 @@
           up: up,
           allTime: allTime,
           clients: clients,
+          inbounds: inbounds,
+          activeInbounds: activeInbounds,
           deactive: deactive,
           depleted: depleted,
           expiring: expiring,
         };
       },
+      inboundEmergencyUpstreamOptions() {
+        const configs = Array.isArray(this.inboundEmergencyModal.configs) ? this.inboundEmergencyModal.configs : [];
+        return configs.map(config => {
+          return {
+            id: config.id,
+            upstreamId: config.upstreamId,
+            upstreamName: config.upstreamName || `上游 ${config.upstreamId}`,
+            name: config.name || `配置 ${config.id}`,
+            enable: !!config.enable,
+            nodeCount: Number(config.nodeCount || 0),
+          };
+        });
+      },
+      groupedInboundEmergencyConfigs() {
+        const groups = {};
+        for (const config of this.inboundEmergencyUpstreamOptions) {
+          const upstreamId = config.upstreamId || 0;
+          const key = String(upstreamId);
+          if (!groups[key]) {
+            groups[key] = {
+              key,
+              upstreamId,
+              upstreamName: config.upstreamName,
+              enable: config.enable,
+              configs: [],
+            };
+          }
+          groups[key].enable = groups[key].enable || config.enable;
+          groups[key].configs.push(config);
+        }
+        return Object.keys(groups).map(key => groups[key]);
+      },
+      filteredUpstreamNodes() {
+        return this.filterNodes(this.upstreamNodes, this.inboundUpstreamModal.search);
+      },
       groupedUpstreamNodes() {
         const map = {};
-        for (const node of this.upstreamNodes) {
+        for (const node of this.filteredUpstreamNodes) {
           const upstreamId = node.upstreamId || 0;
           if (!map[upstreamId]) {
             map[upstreamId] = {
@@ -2523,6 +3534,39 @@
           map[upstreamId].nodes.push(node);
         }
         return Object.keys(map).map(key => map[key]);
+      },
+      upstreamQuickTags() {
+        return this.buildNodeQuickTags(this.filteredUpstreamNodes);
+      },
+      quickConfigPreview() {
+        const dbInbound = this.dbInbounds.find(row => row.id === this.quickConfigModal.inboundId);
+        if (!dbInbound) return '-';
+        const expiry = this.quickConfigModal.durationPreset === 'none' ?
+          '不调整' :
+          `${this.quickConfigModal.durationMode === 'subtract' ? '减少后为' : '增加后为'} ${
+            this.calculateQuickExpiry() > 0 ? IntlUtil.formatDate(this.calculateQuickExpiry()) : '无限'
+          }`;
+        const trafficTotal = this.calculateQuickTrafficTotal(dbInbound);
+        let traffic = '不调整';
+        if (trafficTotal !== null) {
+          const mode = this.quickConfigModal.trafficPreset === 'unlimited' ?
+            '设为' :
+            (this.quickConfigModal.trafficMode === 'reset' ?
+              '覆盖重置为' :
+              (this.quickConfigModal.trafficMode === 'subtract' ? '减少后为' : '增加后为'));
+          traffic = `${mode} ${this.formatTrafficLimit(trafficTotal)}`;
+        }
+        const deviceLimit = this.calculateQuickDeviceLimit(dbInbound);
+        const deviceDelta = Number(this.quickConfigModal.deviceLimitDelta || 0);
+        const device = deviceDelta !== 0 ?
+          `${deviceLimit} 台` :
+          '不调整';
+        return `到期：${expiry}；流量：${traffic}；设备限制：${device}`;
+      },
+      quickConfigDeviceMinDelta() {
+        const dbInbound = this.dbInbounds.find(row => row.id === this.quickConfigModal.inboundId);
+        if (!dbInbound) return 0;
+        return 1 - Math.max(1, Number(dbInbound.deviceLimit || 1));
       }
     },
   });
@@ -2566,6 +3610,21 @@
     opacity: 1;
   }
 
+  .count-dot-tag.ant-tag {
+    width: 22px;
+    min-width: 22px;
+    height: 22px;
+    padding: 0 !important;
+    border-radius: 50%;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    line-height: 20px;
+    font-size: 12px;
+    font-weight: 500;
+    text-align: center;
+  }
+
   .traffic-reset-stat-action {
     height: 100%;
     min-height: 54px;
@@ -2585,6 +3644,173 @@
     max-height: 390px;
     overflow: auto;
     padding-right: 6px;
+  }
+
+  .node-search-input {
+    max-width: 360px;
+  }
+
+  .node-tag-tools {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 12px;
+    padding: 10px 12px;
+    border: 1px solid rgba(24, 144, 255, .22);
+    border-radius: 8px;
+    background: rgba(24, 144, 255, .07);
+  }
+
+  .tag-tools-label {
+    font-weight: 600;
+    margin-right: 2px;
+  }
+
+  .quick-node-tag {
+    margin-right: 0;
+    line-height: 28px;
+    padding: 2px 8px;
+    border-radius: 999px;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, .10);
+    transition: transform .15s ease, box-shadow .15s ease, background .15s ease;
+  }
+
+  .quick-node-tag:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 5px 12px rgba(24, 144, 255, .22);
+  }
+
+  .quick-node-tag a {
+    color: #fff !important;
+    font-weight: 700;
+    padding: 2px 8px;
+    border-radius: 999px;
+    background: rgba(0, 0, 0, .20);
+    transition: color .15s ease, background .15s ease, box-shadow .15s ease;
+  }
+
+  .quick-node-tag a:hover {
+    color: #096dd9 !important;
+    background: #fff;
+    box-shadow: 0 2px 8px rgba(24, 144, 255, .28);
+  }
+
+  .quick-node-tag .ant-divider {
+    background: rgba(255, 255, 255, .55);
+  }
+
+  .emergency-action-cell {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    min-width: 82px;
+  }
+
+  .emergency-config-trigger {
+    border-color: #fa8c16;
+    color: #fa8c16;
+    box-shadow: 0 2px 6px rgba(250, 140, 22, .18);
+    transition: transform .15s ease, box-shadow .15s ease, background .15s ease, color .15s ease;
+  }
+
+  .emergency-config-trigger:hover,
+  .emergency-config-trigger:focus {
+    color: #fff;
+    background: #fa8c16;
+    border-color: #fa8c16;
+    transform: translateY(-1px);
+    box-shadow: 0 6px 14px rgba(250, 140, 22, .30);
+  }
+
+  .emergency-upstream-list {
+    max-height: 420px;
+    overflow: auto;
+    padding-right: 6px;
+  }
+
+  .inbound-upstream-monitor {
+    margin: -4px 22px 12px;
+  }
+
+  @media (max-width: 768px) {
+    .inbound-upstream-monitor {
+      margin: -4px 2px 12px;
+    }
+  }
+
+  .emergency-upstream-list .ant-collapse {
+    background: transparent;
+  }
+
+  .emergency-upstream-list .ant-collapse-item {
+    border: 1px solid rgba(250, 140, 22, .22);
+    border-radius: 8px;
+    margin-bottom: 10px;
+    overflow: hidden;
+    background: rgba(250, 140, 22, .04);
+  }
+
+  .emergency-config-list {
+    display: grid;
+    gap: 8px;
+  }
+
+  .emergency-config-list .ant-checkbox-wrapper {
+    margin-left: 0;
+    padding: 9px 10px;
+    border: 1px solid rgba(250, 140, 22, .24);
+    border-radius: 8px;
+    transition: background .15s ease, border-color .15s ease, box-shadow .15s ease;
+  }
+
+  .emergency-config-list .ant-checkbox-wrapper:hover {
+    background: rgba(250, 140, 22, .07);
+    border-color: rgba(250, 140, 22, .45);
+    box-shadow: 0 4px 12px rgba(250, 140, 22, .12);
+  }
+
+  .quick-config-trigger {
+    font-weight: 600;
+    border-color: #1890ff;
+    color: #1890ff;
+    box-shadow: 0 2px 6px rgba(24, 144, 255, .18);
+    transition: transform .15s ease, box-shadow .15s ease, background .15s ease, color .15s ease;
+  }
+
+  .quick-config-trigger:hover,
+  .quick-config-trigger:focus {
+    color: #fff;
+    background: #1890ff;
+    border-color: #1890ff;
+    transform: translateY(-1px);
+    box-shadow: 0 6px 14px rgba(24, 144, 255, .30);
+  }
+
+  .quick-config-form .quick-config-radio-group {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .quick-config-form .ant-radio-button-wrapper {
+    border-radius: 8px !important;
+    border-left-width: 1px;
+    font-weight: 600;
+    margin-bottom: 6px;
+    transition: transform .15s ease, box-shadow .15s ease, border-color .15s ease;
+  }
+
+  .quick-config-form .ant-radio-button-wrapper:hover {
+    color: #1890ff;
+    border-color: #1890ff;
+    transform: translateY(-1px);
+    box-shadow: 0 4px 12px rgba(24, 144, 255, .18);
+  }
+
+  .quick-config-form .ant-radio-button-wrapper-checked {
+    box-shadow: 0 5px 14px rgba(24, 144, 255, .24);
   }
 
   .node-collapse {

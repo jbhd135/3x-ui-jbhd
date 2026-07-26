@@ -15,14 +15,12 @@
             </a-space>
           </template>
           <a-table row-key="id" :columns="upstreamColumns" :data-source="upstreams" :pagination="{ pageSize: 10 }"
-            size="middle" :scroll="{ x: 1120 }">
+            size="middle" :scroll="{ x: 1240 }">
             <template slot="enable" slot-scope="text, record">
               <a-switch :checked="record.enable" @change="checked => toggleUpstream(record, checked)"></a-switch>
             </template>
             <template slot="nodes" slot-scope="text, record">
-              <a-button size="small" icon="cluster" @click="openNodeModal(record)">
-                [[ record.nodes ? record.nodes.length : 0 ]]
-              </a-button>
+              <span class="upstream-node-count">[[ record.nodes ? record.nodes.length : 0 ]]</span>
             </template>
             <template slot="traffic" slot-scope="text, record">
               <a-popover :overlay-class-name="themeSwitcher.currentTheme">
@@ -42,8 +40,9 @@
                     </tr>
                   </table>
                 </template>
-                <a-tag :color="remainingTrafficColor(record)">
-                  剩余 [[ formatRemainingTraffic(record) ]]
+                <a-tag class="upstream-traffic-tag" :color="remainingTrafficColor(record)">
+                  <span class="upstream-traffic-prefix">剩余</span>
+                  <span class="upstream-traffic-value">[[ formatRemainingTraffic(record) ]]</span>
                 </a-tag>
               </a-popover>
             </template>
@@ -69,6 +68,7 @@
             <template slot="action" slot-scope="text, record">
               <a-space>
                 <a-button size="small" icon="cluster" @click="openNodeModal(record)">节点</a-button>
+                <a-button size="small" icon="profile" @click="openConfigModal(record)">节点配置</a-button>
                 <a-button size="small" icon="sync" :loading="syncingId === record.id"
                   @click="syncUpstream(record)"></a-button>
                 <a-button size="small" icon="edit" @click="openUpstreamModal(record)"></a-button>
@@ -98,7 +98,7 @@
 
   <a-modal v-model="nodeModal.visible" :title="'上游节点 - ' + nodeModal.upstreamName" :footer="null"
     :class="themeSwitcher.currentTheme" width="980px">
-    <a-alert type="info" show-icon message="关闭的节点不会出现在客户添加页，也不会输出到客户订阅或入站订阅。"
+    <a-alert type="info" show-icon message="关闭的节点不会输出到下游入站订阅。"
       class="mb-10"></a-alert>
     <div v-if="nodeModal.nodes.length" class="node-country-toolbar">
       <div class="node-country-title">按国家快速启用</div>
@@ -113,13 +113,44 @@
         [[ group.label ]] ([[ group.enabledCount ]]/[[ group.total ]])
       </a-checkbox>
     </div>
-    <a-table row-key="id" :columns="nodeColumns" :data-source="nodeModal.nodes" :pagination="false" size="middle"
-      :loading="nodeModal.bulkSaving" :scroll="{ x: 900, y: 520 }">
+    <div class="node-filter-tools">
+      <a-input v-model="nodeModal.search" allow-clear class="node-search-input"
+        placeholder="搜索节点、协议、订阅或标签"></a-input>
+      <a-space class="node-edit-tools">
+        <a-input v-model="nodeModal.tagInput" allow-clear class="node-tag-input" placeholder="输入自定义标签"
+          @pressEnter="updateSelectedNodesTag(true)"></a-input>
+        <a-button type="primary" icon="tag" :disabled="!canUpdateSelectedTag"
+          @click="updateSelectedNodesTag(true)">添加到已选</a-button>
+        <a-button icon="delete" :disabled="!canUpdateSelectedTag"
+          @click="updateSelectedNodesTag(false)">从已选移除</a-button>
+      </a-space>
+    </div>
+    <div class="node-tag-tools" v-if="nodeQuickTags.length">
+      <span class="tag-tools-label">自定义标签：</span>
+      <a-tag v-for="tag in nodeQuickTags" :key="tag.label" color="blue" class="quick-node-tag">
+        [[ tag.label ]] [[ tag.nodeIds.length ]]
+        <a-divider type="vertical"></a-divider>
+        <a @click="batchToggleNodesByTag(tag, true)">启用</a>
+        <a-divider type="vertical"></a-divider>
+        <a @click="batchToggleNodesByTag(tag, false)">关闭</a>
+        <a-divider type="vertical"></a-divider>
+        <a @click="removeTagFromNodesByTag(tag)">删除标签</a>
+      </a-tag>
+    </div>
+    <a-table row-key="id" :columns="nodeColumns" :data-source="filteredNodeModalNodes" :pagination="false" size="middle"
+      :row-selection="nodeRowSelection" :scroll="{ x: 1040, y: 520 }">
       <template slot="enable" slot-scope="text, record">
         <a-switch :checked="record.enable" @change="checked => toggleNode(record, checked)"></a-switch>
       </template>
       <template slot="sourceType" slot-scope="text, record">
         <a-tag :color="record.sourceType === 'clash' ? 'purple' : 'green'">[[ record.sourceType ]]</a-tag>
+      </template>
+      <template slot="tags" slot-scope="text, record">
+        <template v-if="parseNodeTags(record).length">
+          <a-tag v-for="tag in parseNodeTags(record)" :key="tag" color="geekblue" closable
+            @close="event => removeNodeTag(record, tag, event)">[[ tag ]]</a-tag>
+        </template>
+        <span v-else>-</span>
       </template>
       <template slot="copyLink" slot-scope="text, record">
         <a-tooltip :title="record.link || record.clash || '暂无可复制内容'">
@@ -128,6 +159,71 @@
         </a-tooltip>
       </template>
     </a-table>
+  </a-modal>
+
+  <a-modal v-model="configModal.visible" :title="'节点配置 - ' + configModal.upstreamName"
+    :confirm-loading="configModal.saving" :class="themeSwitcher.currentTheme" width="980px"
+    @ok="submitNodeConfig">
+    <a-alert type="info" show-icon message="同一个上游订阅可以保存多套节点配置；入站列表里的上游启用会选择具体配置方案。"
+      class="mb-10"></a-alert>
+    <a-row :gutter="[12,12]">
+      <a-col :span="isMobile ? 24 : 7">
+        <a-button type="primary" icon="plus" block class="mb-10" @click="newNodeConfig">新建配置</a-button>
+        <div class="config-list">
+          <div v-for="config in configModal.configs" :key="config.id"
+            :class="['config-list-item', configModal.activeConfigId === config.id ? 'active' : '']"
+            @click="selectNodeConfig(config)">
+            <span>[[ config.name ]]</span>
+            <a-tag color="blue">[[ config.nodeCount || 0 ]]</a-tag>
+          </div>
+          <a-empty v-if="configModal.configs.length === 0" description="暂无配置"></a-empty>
+        </div>
+      </a-col>
+      <a-col :span="isMobile ? 24 : 17">
+        <a-space class="config-edit-head">
+          <a-input v-model.trim="configModal.name" placeholder="配置名称，例如：香港高速 / 奈飞专用"
+            class="config-name-input"></a-input>
+          <a-button icon="delete" type="danger" :disabled="!configModal.activeConfigId"
+            @click="deleteNodeConfig">删除当前配置</a-button>
+        </a-space>
+        <a-input v-model="configModal.search" allow-clear class="node-search-input mb-10"
+          placeholder="搜索节点、协议、订阅或标签"></a-input>
+        <div class="config-select-tools mb-10">
+          <a-button size="small" icon="check-square" @click="selectAllConfigNodes">全选</a-button>
+          <a-button size="small" icon="minus-square" @click="clearConfigSelection">清空</a-button>
+          <div class="config-preset-tools">
+            <a-checkbox v-for="group in configPresetGroups" :key="group.key" :checked="group.checked"
+              :indeterminate="group.indeterminate" :disabled="group.total === 0 && !group.checked"
+              @change="event => toggleConfigPresetGroup(group, event.target.checked)">
+              [[ group.label ]]
+              <span v-if="group.total">([[ group.selectedCount ]]/[[ group.total ]])</span>
+            </a-checkbox>
+          </div>
+        </div>
+        <div class="node-tag-tools" v-if="configQuickTags.length">
+          <span class="tag-tools-label">自定义标签：</span>
+          <a-tag v-for="tag in configQuickTags" :key="tag.label" color="blue" class="quick-node-tag">
+            [[ tag.label ]] [[ tag.nodeIds.length ]]
+            <a-divider type="vertical"></a-divider>
+            <a @click="applyConfigTag(tag, true)">选择</a>
+            <a-divider type="vertical"></a-divider>
+            <a @click="applyConfigTag(tag, false)">取消</a>
+          </a-tag>
+        </div>
+        <div class="node-checkbox-group">
+          <a-row :gutter="[8,8]">
+            <a-col v-for="node in filteredConfigNodes" :key="node.id" :span="isMobile ? 24 : 12">
+              <a-checkbox :checked="isConfigNodeSelected(node.id)"
+                @change="event => setConfigNodeSelected(node.id, event.target.checked)">
+                <span class="node-name">[[ node.name ]]</span>
+                <a-tag class="ml-5" :color="node.sourceType === 'clash' ? 'purple' : 'green'">[[ node.protocol ]]</a-tag>
+                <a-tag v-for="tag in parseNodeTags(node)" :key="tag" class="ml-5" color="geekblue">[[ tag ]]</a-tag>
+              </a-checkbox>
+            </a-col>
+          </a-row>
+        </div>
+      </a-col>
+    </a-row>
   </a-modal>
 </a-layout>
 
@@ -247,6 +343,45 @@
     },
   ];
 
+  const CONFIG_NODE_PRESET_GROUPS = [{
+      key: 'DIRECT',
+      label: '直连',
+      category: 'line',
+      tokens: ['直连', 'direct']
+    },
+    {
+      key: 'IPLC',
+      label: 'IPLC',
+      category: 'line',
+      tokens: ['IPLC']
+    },
+    {
+      key: 'US',
+      label: '美国',
+      category: 'country'
+    },
+    {
+      key: 'SG',
+      label: '新加坡',
+      category: 'country'
+    },
+    {
+      key: 'JP',
+      label: '日本',
+      category: 'country'
+    },
+    {
+      key: 'TW',
+      label: '台湾',
+      category: 'country'
+    },
+    {
+      key: 'HK',
+      label: '香港',
+      category: 'country'
+    },
+  ];
+
   const upstreamColumns = [{
       title: '名称',
       dataIndex: 'name',
@@ -273,7 +408,7 @@
       scopedSlots: {
         customRender: 'traffic'
       },
-      width: 150
+      width: 190
     },
     {
       title: '剩余天数',
@@ -299,12 +434,17 @@
       scopedSlots: {
         customRender: 'action'
       },
-      width: 230,
+      width: 330,
       fixed: 'right'
     },
   ];
 
   const nodeColumns = [{
+      title: 'Relay Port',
+      dataIndex: 'relayPort',
+      width: 110
+    },
+    {
       title: '节点名',
       dataIndex: 'name',
       width: 240,
@@ -328,6 +468,13 @@
         customRender: 'enable'
       },
       width: 90
+    },
+    {
+      title: '标签',
+      scopedSlots: {
+        customRender: 'tags'
+      },
+      width: 180
     },
     {
       title: '复制',
@@ -364,7 +511,24 @@
         upstreamId: null,
         upstreamName: '',
         nodes: [],
+        search: '',
+        tagInput: '',
+        selectedRowKeys: [],
         bulkSaving: false,
+      },
+      configModal: {
+        visible: false,
+        saving: false,
+        loading: false,
+        upstreamId: null,
+        upstreamName: '',
+        nodes: [],
+        configs: [],
+        activeConfigId: null,
+        name: '',
+        nodeIds: [],
+        presetKeys: [],
+        search: '',
       },
     },
     computed: {
@@ -406,6 +570,49 @@
           return a.label.localeCompare(b.label, 'zh-CN');
         });
       },
+      filteredNodeModalNodes() {
+        return this.filterNodes(this.nodeModal.nodes, this.nodeModal.search);
+      },
+      filteredConfigNodes() {
+        return this.sortConfigNodesBySelection(
+          this.filterNodes(this.configModal.nodes, this.configModal.search)
+        );
+      },
+      nodeQuickTags() {
+        return this.buildNodeQuickTags(this.filteredNodeModalNodes);
+      },
+      configQuickTags() {
+        return this.buildNodeQuickTags(this.filteredConfigNodes);
+      },
+      configPresetGroups() {
+        const selected = new Set(this.configModal.nodeIds);
+        const active = new Set(this.configModal.presetKeys || []);
+        return CONFIG_NODE_PRESET_GROUPS.map(preset => {
+          const nodes = this.filteredConfigNodes.filter(node => this.nodeMatchesConfigPreset(node, preset));
+          const selectedCount = nodes.filter(node => selected.has(node.id)).length;
+          return {
+            key: preset.key,
+            label: preset.label,
+            category: preset.category,
+            nodes,
+            total: nodes.length,
+            selectedCount,
+            checked: active.has(preset.key),
+            indeterminate: false,
+          };
+        });
+      },
+      nodeRowSelection() {
+        return {
+          selectedRowKeys: this.nodeModal.selectedRowKeys,
+          onChange: keys => {
+            this.nodeModal.selectedRowKeys = keys;
+          },
+        };
+      },
+      canUpdateSelectedTag() {
+        return this.nodeModal.selectedRowKeys.length > 0 && this.nodeModal.tagInput.trim().length > 0;
+      },
     },
     methods: {
       async loadAll() {
@@ -417,6 +624,10 @@
             if (this.nodeModal.visible) {
               const current = this.upstreams.find(item => item.id === this.nodeModal.upstreamId);
               this.nodeModal.nodes = current && Array.isArray(current.nodes) ? current.nodes : [];
+            }
+            if (this.configModal.visible) {
+              const current = this.upstreams.find(item => item.id === this.configModal.upstreamId);
+              this.configModal.nodes = current && Array.isArray(current.nodes) ? current.nodes : [];
             }
           }
         } finally {
@@ -445,6 +656,9 @@
         this.nodeModal.upstreamId = record.id;
         this.nodeModal.upstreamName = record.name;
         this.nodeModal.nodes = Array.isArray(record.nodes) ? record.nodes : [];
+        this.nodeModal.search = '';
+        this.nodeModal.tagInput = '';
+        this.nodeModal.selectedRowKeys = [];
         this.nodeModal.visible = true;
       },
       nodeCountryInfo(name) {
@@ -491,6 +705,333 @@
           return pattern.test(upperText);
         }
         return upperText.includes(upperToken);
+      },
+      nodeMatchesConfigPreset(node, preset) {
+        const text = String(node && node.name || '');
+        if (!preset || !text) return false;
+        if (Array.isArray(preset.tokens) && preset.tokens.some(token => this.nodeNameMatchesToken(text, token))) {
+          return true;
+        }
+        const country = this.nodeCountryInfo(text);
+        return country.key === preset.key;
+      },
+      parseNodeTags(node) {
+        if (!node) return [];
+        if (Array.isArray(node.tags)) {
+          return node.tags.map(tag => String(tag || '').trim()).filter(Boolean);
+        }
+        const raw = String(node.tags || '').trim();
+        if (!raw) return [];
+        try {
+          const parsed = JSON.parse(raw);
+          if (Array.isArray(parsed)) {
+            return parsed.map(tag => String(tag || '').trim()).filter(Boolean);
+          }
+        } catch (e) {}
+        return raw.split(/[,\s，;；]+/).map(tag => tag.trim()).filter(Boolean);
+      },
+      normalizeNodeTag(tag) {
+        return String(tag || '').trim().replace(/^[#,，;；]+|[#,，;；]+$/g, '').slice(0, 32);
+      },
+      filterNodes(nodes, keyword) {
+        const source = Array.isArray(nodes) ? nodes : [];
+        const query = String(keyword || '').trim().toLowerCase();
+        if (!query) return source;
+        return source.filter(node => {
+          const haystack = [
+            node.name,
+            node.protocol,
+            node.sourceType,
+            node.upstreamName,
+            this.parseNodeTags(node).join(' '),
+          ].join(' ').toLowerCase();
+          return haystack.includes(query);
+        });
+      },
+      sortConfigNodesBySelection(nodes) {
+        const source = Array.isArray(nodes) ? nodes.slice() : [];
+        const selected = new Set(Array.isArray(this.configModal.nodeIds) ? this.configModal.nodeIds : []);
+        return source
+          .map((node, index) => ({
+            node,
+            index,
+            selected: selected.has(node.id),
+          }))
+          .sort((a, b) => {
+            if (a.selected !== b.selected) return a.selected ? -1 : 1;
+            return a.index - b.index;
+          })
+          .map(item => item.node);
+      },
+      buildNodeQuickTags(nodes) {
+        const source = Array.isArray(nodes) ? nodes : [];
+        const tags = {};
+        for (const node of source) {
+          for (const tag of this.parseNodeTags(node)) {
+            const key = tag.toLowerCase();
+            if (!tags[key]) {
+              tags[key] = {
+                label: tag,
+                nodeIds: [],
+              };
+            }
+            tags[key].nodeIds.push(node.id);
+          }
+        }
+        return Object.keys(tags)
+          .map(key => tags[key])
+          .sort((a, b) => a.label.localeCompare(b.label, 'zh-CN'));
+      },
+      async batchToggleNodesByTag(tag, enable) {
+        if (!tag || !tag.nodeIds || tag.nodeIds.length === 0) return;
+        const msg = await HttpUtil.post('/panel/api/subscription-market/nodes/batch-toggle', {
+          nodeIds: tag.nodeIds,
+          enable
+        });
+        if (msg.success) {
+          for (const node of this.nodeModal.nodes) {
+            if (tag.nodeIds.includes(node.id)) {
+              node.enable = enable;
+            }
+          }
+          await this.loadAll();
+        }
+      },
+      async bulkToggleNodes(nodes, checked) {
+        const list = Array.isArray(nodes) ? nodes : [];
+        const nodeIds = list.map(node => Number(node.id || 0)).filter(id => id > 0);
+        if (nodeIds.length === 0) return;
+        const previous = new Map(list.map(node => [node.id, node.enable]));
+        list.forEach(node => {
+          node.enable = checked;
+        });
+        this.nodeModal.bulkSaving = true;
+        try {
+          const msg = await HttpUtil.post('/panel/api/subscription-market/nodes/batch-toggle', {
+            nodeIds,
+            enable: checked,
+          });
+          if (!msg.success) {
+            list.forEach(node => {
+              if (previous.has(node.id)) node.enable = previous.get(node.id);
+            });
+            return;
+          }
+          await this.loadAll();
+        } finally {
+          this.nodeModal.bulkSaving = false;
+        }
+      },
+      async removeTagFromNodesByTag(tag) {
+        if (!tag || !tag.label || !tag.nodeIds || tag.nodeIds.length === 0) return;
+        const msg = await HttpUtil.post('/panel/api/subscription-market/nodes/batch-tags', {
+          nodeIds: tag.nodeIds,
+          tag: tag.label,
+          add: false
+        });
+        if (msg.success) {
+          const selected = new Set(tag.nodeIds);
+          for (const node of this.nodeModal.nodes) {
+            if (!selected.has(node.id)) continue;
+            this.removeTagFromNodeLocal(node, tag.label);
+          }
+          await this.loadAll();
+        }
+      },
+      async removeNodeTag(record, tag, event) {
+        if (event && event.preventDefault) {
+          event.preventDefault();
+        }
+        if (!record || !record.id || !tag) return;
+        const msg = await HttpUtil.post('/panel/api/subscription-market/nodes/batch-tags', {
+          nodeIds: [record.id],
+          tag,
+          add: false
+        });
+        if (msg.success) {
+          this.removeTagFromNodeLocal(record, tag);
+          await this.loadAll();
+        }
+      },
+      removeTagFromNodeLocal(node, tag) {
+        const tags = this.parseNodeTags(node).filter(item => item.toLowerCase() !== String(tag || '').toLowerCase());
+        node.tags = JSON.stringify(tags);
+      },
+      async updateSelectedNodesTag(add) {
+        const tag = this.normalizeNodeTag(this.nodeModal.tagInput);
+        const nodeIds = this.nodeModal.selectedRowKeys.map(id => Number(id)).filter(id => id > 0);
+        if (!tag || nodeIds.length === 0) return;
+        const msg = await HttpUtil.post('/panel/api/subscription-market/nodes/batch-tags', {
+          nodeIds,
+          tag,
+          add
+        });
+        if (msg.success) {
+          const selected = new Set(nodeIds);
+          for (const node of this.nodeModal.nodes) {
+            if (!selected.has(node.id)) continue;
+            const tags = new Set(this.parseNodeTags(node));
+            if (add) {
+              tags.add(tag);
+            } else {
+              this.removeTagFromNodeLocal(node, tag);
+              continue;
+            }
+            node.tags = JSON.stringify(Array.from(tags));
+          }
+          this.nodeModal.tagInput = '';
+          await this.loadAll();
+        }
+      },
+      async openConfigModal(record) {
+        this.configModal.upstreamId = record.id;
+        this.configModal.upstreamName = record.name;
+        this.configModal.nodes = Array.isArray(record.nodes) ? record.nodes : [];
+        this.configModal.configs = [];
+        this.configModal.activeConfigId = null;
+        this.configModal.name = '';
+        this.configModal.nodeIds = [];
+        this.configModal.presetKeys = [];
+        this.configModal.search = '';
+        this.configModal.visible = true;
+        await this.loadNodeConfigs(record.id);
+      },
+      async loadNodeConfigs(upstreamId) {
+        this.configModal.loading = true;
+        try {
+          const msg = await HttpUtil.get(`/panel/api/subscription-market/upstreams/${upstreamId}/node-configs`);
+          if (msg.success && Array.isArray(msg.obj)) {
+            this.configModal.configs = msg.obj;
+            if (this.configModal.configs.length > 0) {
+              const current = this.configModal.configs.find(item => item.id === this.configModal.activeConfigId) ||
+                this.configModal.configs[0];
+              this.selectNodeConfig(current);
+            } else {
+              this.newNodeConfig();
+            }
+          }
+        } finally {
+          this.configModal.loading = false;
+        }
+      },
+      newNodeConfig() {
+        this.configModal.activeConfigId = null;
+        this.configModal.name = '新配置';
+        this.configModal.nodeIds = [];
+        this.configModal.presetKeys = [];
+      },
+      selectNodeConfig(config) {
+        if (!config) return;
+        this.configModal.activeConfigId = config.id;
+        this.configModal.name = config.name;
+        this.configModal.nodeIds = Array.isArray(config.nodeIds) ? config.nodeIds.slice() : [];
+        this.configModal.presetKeys = [];
+      },
+      isConfigNodeSelected(nodeId) {
+        return this.configModal.nodeIds.includes(nodeId);
+      },
+      setConfigNodeSelected(nodeId, checked) {
+        this.configModal.presetKeys = [];
+        const selected = new Set(this.configModal.nodeIds);
+        if (checked) {
+          selected.add(nodeId);
+        } else {
+          selected.delete(nodeId);
+        }
+        this.configModal.nodeIds = Array.from(selected);
+      },
+      selectAllConfigNodes() {
+        this.configModal.presetKeys = [];
+        this.configModal.nodeIds = this.filteredConfigNodes.map(node => node.id);
+      },
+      clearConfigSelection() {
+        this.configModal.presetKeys = [];
+        this.configModal.nodeIds = [];
+      },
+      applyConfigTag(tag, checked) {
+        this.configModal.presetKeys = [];
+        const selected = new Set(this.configModal.nodeIds);
+        for (const id of tag.nodeIds || []) {
+          if (checked) {
+            selected.add(id);
+          } else {
+            selected.delete(id);
+          }
+        }
+        this.configModal.nodeIds = Array.from(selected);
+      },
+      toggleConfigPresetGroup(group, checked) {
+        if (!group || !group.key) return;
+        const presetKeys = new Set(this.configModal.presetKeys || []);
+        if (checked) {
+          presetKeys.add(group.key);
+        } else {
+          presetKeys.delete(group.key);
+        }
+        this.configModal.presetKeys = Array.from(presetKeys);
+        this.applyConfigPresetSelection();
+      },
+      applyConfigPresetSelection() {
+        const activePresets = CONFIG_NODE_PRESET_GROUPS.filter(preset =>
+          (this.configModal.presetKeys || []).includes(preset.key));
+        if (activePresets.length === 0) {
+          this.configModal.nodeIds = [];
+          return;
+        }
+        const linePresets = activePresets.filter(preset => preset.category === 'line');
+        const countryPresets = activePresets.filter(preset => preset.category === 'country');
+        const selectedNodes = this.filteredConfigNodes.filter(node => {
+          const matchesLine = linePresets.length === 0 ||
+            linePresets.some(preset => this.nodeMatchesConfigPreset(node, preset));
+          const matchesCountry = countryPresets.length === 0 ||
+            countryPresets.some(preset => this.nodeMatchesConfigPreset(node, preset));
+          return matchesLine && matchesCountry;
+        });
+        this.configModal.nodeIds = selectedNodes.map(node => node.id);
+      },
+      async submitNodeConfig() {
+        if (!this.configModal.upstreamId) return;
+        if (!this.configModal.name.trim()) {
+          this.$message.error('配置名称不能为空');
+          return;
+        }
+        this.configModal.saving = true;
+        try {
+          const url = this.configModal.activeConfigId ?
+            `/panel/api/subscription-market/upstreams/${this.configModal.upstreamId}/node-configs/update/${this.configModal.activeConfigId}` :
+            `/panel/api/subscription-market/upstreams/${this.configModal.upstreamId}/node-configs/add`;
+          const msg = await HttpUtil.post(url, {
+            name: this.configModal.name,
+            nodeIds: this.configModal.nodeIds
+          });
+          if (msg.success) {
+            if (msg.obj && msg.obj.id) {
+              this.configModal.activeConfigId = msg.obj.id;
+            }
+            await this.loadNodeConfigs(this.configModal.upstreamId);
+            await this.loadAll();
+          }
+        } finally {
+          this.configModal.saving = false;
+        }
+      },
+      deleteNodeConfig() {
+        if (!this.configModal.upstreamId || !this.configModal.activeConfigId) return;
+        this.$confirm({
+          title: '删除节点配置',
+          content: `确定删除「${this.configModal.name}」吗？`,
+          okText: '删除',
+          cancelText: '取消',
+          class: themeSwitcher.currentTheme,
+          onOk: async () => {
+            const msg = await HttpUtil.post(
+              `/panel/api/subscription-market/upstreams/${this.configModal.upstreamId}/node-configs/delete/${this.configModal.activeConfigId}`);
+            if (msg.success) {
+              await this.loadNodeConfigs(this.configModal.upstreamId);
+              await this.loadAll();
+            }
+          },
+        });
       },
       async submitUpstream() {
         const form = this.upstreamModal.form;
@@ -541,31 +1082,6 @@
         });
         if (!msg.success) {
           record.enable = previous;
-        }
-      },
-      async bulkToggleNodes(nodes, checked) {
-        const list = Array.isArray(nodes) ? nodes : [];
-        const nodeIds = list.map(node => Number(node.id || 0)).filter(id => id > 0);
-        if (nodeIds.length === 0) return;
-        const previous = new Map(list.map(node => [node.id, node.enable]));
-        list.forEach(node => {
-          node.enable = checked;
-        });
-        this.nodeModal.bulkSaving = true;
-        try {
-          const msg = await HttpUtil.post('/panel/api/subscription-market/nodes/bulk-toggle', {
-            nodeIds,
-            enable: checked,
-          });
-          if (!msg.success) {
-            list.forEach(node => {
-              if (previous.has(node.id)) node.enable = previous.get(node.id);
-            });
-            return;
-          }
-          await this.loadAll();
-        } finally {
-          this.nodeModal.bulkSaving = false;
         }
       },
       async copyNodeLink(record) {
@@ -636,6 +1152,132 @@
   });
 </script>
 <style>
+  .error-tag {
+    max-width: 120px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .upstream-subscriptions-page .upstream-traffic-tag {
+    display: inline-flex;
+    align-items: center;
+    max-width: 100%;
+    min-width: 0;
+    height: auto;
+    line-height: 20px;
+    padding: 2px 8px;
+    white-space: nowrap;
+    vertical-align: middle;
+  }
+
+  .upstream-subscriptions-page .upstream-traffic-prefix {
+    flex: 0 0 auto;
+  }
+
+  .upstream-subscriptions-page .upstream-traffic-value {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .upstream-subscriptions-page .upstream-node-count {
+    display: inline-block;
+    min-width: 24px;
+    text-align: center;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .node-filter-tools {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 12px;
+  }
+
+  .node-search-input {
+    max-width: 340px;
+  }
+
+  .node-edit-tools {
+    flex-wrap: wrap;
+  }
+
+  .node-tag-input {
+    width: 180px;
+  }
+
+  .config-list {
+    display: grid;
+    gap: 8px;
+    max-height: 430px;
+    overflow: auto;
+  }
+
+  .config-list-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    cursor: pointer;
+    padding: 9px 10px;
+    border: 1px solid rgba(24, 144, 255, .18);
+    border-radius: 8px;
+    transition: background .15s ease, border-color .15s ease, box-shadow .15s ease;
+  }
+
+  .config-list-item:hover,
+  .config-list-item.active {
+    background: rgba(24, 144, 255, .08);
+    border-color: rgba(24, 144, 255, .45);
+    box-shadow: 0 4px 12px rgba(24, 144, 255, .14);
+  }
+
+  .config-edit-head {
+    display: flex;
+    flex-wrap: wrap;
+    margin-bottom: 10px;
+  }
+
+  .config-name-input {
+    width: 280px;
+  }
+
+  .config-select-tools {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px 12px;
+  }
+
+  .config-preset-tools {
+    display: flex;
+    flex: 1 1 360px;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px 12px;
+    min-width: 0;
+  }
+
+  .config-preset-tools .ant-checkbox-wrapper {
+    margin-left: 0;
+    white-space: nowrap;
+  }
+
+  .node-tag-tools {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 12px;
+    padding: 10px 12px;
+    border: 1px solid rgba(24, 144, 255, .22);
+    border-radius: 8px;
+    background: rgba(24, 144, 255, .07);
+  }
+
   .node-country-toolbar {
     display: flex;
     flex-wrap: wrap;
@@ -653,10 +1295,58 @@
     white-space: nowrap;
   }
 
-  .error-tag {
-    max-width: 120px;
+  .tag-tools-label {
+    font-weight: 600;
+    margin-right: 2px;
+  }
+
+  .quick-node-tag {
+    margin-right: 0;
+    line-height: 28px;
+    padding: 2px 8px;
+    border-radius: 999px;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, .10);
+    transition: transform .15s ease, box-shadow .15s ease, background .15s ease;
+  }
+
+  .quick-node-tag:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 5px 12px rgba(24, 144, 255, .22);
+  }
+
+  .quick-node-tag a {
+    color: #fff !important;
+    font-weight: 700;
+    padding: 2px 8px;
+    border-radius: 999px;
+    background: rgba(0, 0, 0, .20);
+    transition: color .15s ease, background .15s ease, box-shadow .15s ease;
+  }
+
+  .quick-node-tag a:hover {
+    color: #096dd9 !important;
+    background: #fff;
+    box-shadow: 0 2px 8px rgba(24, 144, 255, .28);
+  }
+
+  .quick-node-tag .ant-divider {
+    background: rgba(255, 255, 255, .55);
+  }
+
+  .node-checkbox-group {
+    width: 100%;
+    max-height: 430px;
+    overflow: auto;
+    padding-right: 6px;
+  }
+
+  .node-name {
+    display: inline-block;
+    max-width: 260px;
     overflow: hidden;
     text-overflow: ellipsis;
+    white-space: nowrap;
+    vertical-align: bottom;
   }
 </style>
 {{ template "page/body_end" .}}

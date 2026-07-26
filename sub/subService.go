@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/url"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -42,12 +43,13 @@ func NewSubService(showInfo bool, remarkModel string) *SubService {
 
 // GetSubs retrieves subscription links for a given subscription ID and host.
 func (s *SubService) GetSubs(subId string, host string) ([]string, int64, xray.ClientTraffic, error) {
-	s.address = host
+	s.address = s.resolveNodeHost(host)
 	var result []string
 	var traffic xray.ClientTraffic
 	var lastOnline int64
 	var hasEnabledClient bool
 	var clientTraffics []xray.ClientTraffic
+	var inboundExpiryTimes []int64
 	inbounds, err := s.getInboundsBySubId(subId)
 	if err != nil {
 		return nil, 0, traffic, err
@@ -77,8 +79,13 @@ func (s *SubService) GetSubs(subId string, host string) ([]string, int64, xray.C
 				inbound.StreamSettings = streamSettings
 			}
 		}
+		hasMatchedClient := false
 		for _, client := range clients {
 			if client.SubID == subId {
+				if !hasMatchedClient {
+					inboundExpiryTimes = append(inboundExpiryTimes, inbound.ExpiryTime)
+					hasMatchedClient = true
+				}
 				if client.Enable {
 					hasEnabledClient = true
 				}
@@ -93,7 +100,7 @@ func (s *SubService) GetSubs(subId string, host string) ([]string, int64, xray.C
 		}
 	}
 
-	if upstreamContent, err := (&service.SubscriptionMarketService{}).GetInboundSubscriptionContent(subId); err == nil && upstreamContent != nil {
+	if upstreamContent, err := (&service.SubscriptionMarketService{}).GetInboundSubscriptionContent(subId, host); err == nil && upstreamContent != nil {
 		for _, link := range upstreamContent.Links {
 			if strings.TrimSpace(link) != "" {
 				result = append(result, link)
@@ -127,6 +134,49 @@ func (s *SubService) GetSubs(subId string, host string) ([]string, int64, xray.C
 	}
 	traffic.Enable = hasEnabledClient
 	return result, lastOnline, traffic, nil
+}
+
+func earliestPositiveExpiry(expiryTimes []int64) int64 {
+	var expiryTime int64
+	for _, candidate := range expiryTimes {
+		if candidate <= 0 {
+			continue
+		}
+		if expiryTime == 0 || candidate < expiryTime {
+			expiryTime = candidate
+		}
+	}
+	return expiryTime
+}
+
+func (s *SubService) resolveNodeHost(requestHost string) string {
+	if webDomain, err := s.settingService.GetWebDomain(); err == nil {
+		if host := normalizeHostOnly(webDomain); host != "" {
+			return host
+		}
+	}
+	if subDomain, err := s.settingService.GetSubDomain(); err == nil {
+		if host := normalizeHostOnly(subDomain); host != "" {
+			return host
+		}
+	}
+	return normalizeHostOnly(requestHost)
+}
+
+func normalizeHostOnly(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	if strings.Contains(value, "://") {
+		if u, err := url.Parse(value); err == nil && u.Host != "" {
+			value = u.Host
+		}
+	}
+	if host, _, err := net.SplitHostPort(value); err == nil && host != "" {
+		return strings.Trim(host, "[]")
+	}
+	return strings.Trim(value, "[]")
 }
 
 func (s *SubService) getInboundsBySubId(subId string) ([]*model.Inbound, error) {
@@ -488,20 +538,20 @@ func (s *SubService) genHysteriaLink(inbound *model.Inbound, email string) strin
 				continue
 			}
 			dest, _ := ep["dest"].(string)
-			portF, okPort := ep["port"].(float64)
+			port, okPort := externalProxyPortString(ep["port"])
 			if dest == "" || !okPort {
 				continue
 			}
 			epRemark, _ := ep["remark"].(string)
 
-			link := fmt.Sprintf("%s://%s@%s:%d", protocol, auth, dest, int(portF))
+			link := fmt.Sprintf("%s://%s@%s:%s", protocol, auth, dest, port)
 			u, _ := url.Parse(link)
 			q := u.Query()
 			for k, v := range params {
 				q.Add(k, v)
 			}
 			u.RawQuery = q.Encode()
-			u.Fragment = s.genRemark(inbound, email, epRemark)
+			setEncodedFragment(u, s.genRemark(inbound, email, epRemark))
 			links = append(links, u.String())
 		}
 		return strings.Join(links, "\n")
@@ -515,8 +565,48 @@ func (s *SubService) genHysteriaLink(inbound *model.Inbound, email string) strin
 		q.Add(k, v)
 	}
 	url.RawQuery = q.Encode()
-	url.Fragment = s.genRemark(inbound, email, "")
+	setEncodedFragment(url, s.genRemark(inbound, email, ""))
 	return url.String()
+}
+
+func setEncodedFragment(u *url.URL, fragment string) {
+	u.Fragment = fragment
+	u.RawFragment = strings.ReplaceAll(url.QueryEscape(fragment), "+", "%20")
+}
+
+func externalProxyPortString(value any) (string, bool) {
+	switch v := value.(type) {
+	case float64:
+		port := int(v)
+		if port < 1 || port > 65535 {
+			return "", false
+		}
+		return strconv.Itoa(port), true
+	case string:
+		port := strings.TrimSpace(v)
+		if port == "" {
+			return "", false
+		}
+		return port, true
+	default:
+		return "", false
+	}
+}
+
+func externalProxyPortInt(value any) (int, bool) {
+	switch v := value.(type) {
+	case float64:
+		port := int(v)
+		return port, port >= 1 && port <= 65535
+	case string:
+		port, err := strconv.Atoi(strings.TrimSpace(v))
+		if err != nil {
+			return 0, false
+		}
+		return port, port >= 1 && port <= 65535
+	default:
+		return 0, false
+	}
 }
 
 func (s *SubService) resolveInboundAddress(inbound *model.Inbound) string {
@@ -805,7 +895,10 @@ func (s *SubService) buildExternalProxyURLLinks(
 		ep, _ := externalProxy.(map[string]any)
 		newSecurity, _ := ep["forceTls"].(string)
 		dest, _ := ep["dest"].(string)
-		port := int(ep["port"].(float64))
+		port, ok := externalProxyPortInt(ep["port"])
+		if dest == "" || !ok {
+			continue
+		}
 
 		securityToApply := baseSecurity
 		if newSecurity != "same" {
