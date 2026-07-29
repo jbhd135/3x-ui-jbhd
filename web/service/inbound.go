@@ -13,6 +13,7 @@ import (
 	"math/big"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -34,6 +35,27 @@ import (
 // and integration with the Xray API for real-time updates.
 type InboundService struct {
 	xrayApi xray.XrayAPI
+}
+
+var runSocketCommand = func(name string, args ...string) ([]byte, error) {
+	return exec.Command(name, args...).CombinedOutput()
+}
+
+func terminateInboundTCPConnections(port int) error {
+	if port < 1 || port > 65535 {
+		return fmt.Errorf("invalid inbound port %d", port)
+	}
+
+	output, err := runSocketCommand("ss", "-K", "state", "established", fmt.Sprintf("sport = :%d", port))
+	if err == nil {
+		return nil
+	}
+
+	detail := strings.TrimSpace(string(output))
+	if detail == "" {
+		return fmt.Errorf("terminate TCP connections on port %d: %w", port, err)
+	}
+	return fmt.Errorf("terminate TCP connections on port %d: %w: %s", port, err, detail)
 }
 
 type CopyClientsResult struct {
@@ -1960,7 +1982,8 @@ func (s *InboundService) AddTraffic(inboundTraffics []*xray.Traffic, clientTraff
 	} else if count > 0 {
 		logger.Debugf("%v inbounds disabled", count)
 	}
-	return (dailyResetCount > 0 || dailyNeedRestart || needRestart0 || needRestart1 || needRestart2), disabledClientsCount > 0, nil
+	return (dailyResetCount > 0 || dailyNeedRestart || needRestart0 || needRestart1 || needRestart2),
+		dailyNeedRestart || disabledClientsCount > 0, nil
 }
 
 func (s *InboundService) addInboundTraffic(tx *gorm.DB, traffics []*xray.Traffic) error {
@@ -2250,10 +2273,11 @@ func (s *InboundService) disableDailyLimitInbounds(tx *gorm.DB) (bool, int64, er
 	var candidates []struct {
 		InboundId int
 		Tag       string
+		Port      int
 		Email     string
 	}
 	err := tx.Table("inbounds").
-		Select("inbounds.id as inbound_id, inbounds.tag, client_traffics.email").
+		Select("inbounds.id as inbound_id, inbounds.tag, inbounds.port, client_traffics.email").
 		Joins("JOIN client_traffics ON inbounds.id = client_traffics.inbound_id").
 		Joins("JOIN daily_client_traffics ON daily_client_traffics.inbound_id = client_traffics.inbound_id AND daily_client_traffics.client_email = client_traffics.email AND daily_client_traffics.date = ?", today).
 		Where("inbounds.enable = ? AND client_traffics.enable = ? AND "+dailyLimitCondition, true, true, today).
@@ -2265,15 +2289,22 @@ func (s *InboundService) disableDailyLimitInbounds(tx *gorm.DB) (bool, int64, er
 		return false, 0, nil
 	}
 
-	inboundTags := make(map[int]string, len(candidates))
+	type inboundTarget struct {
+		tag  string
+		port int
+	}
+	inboundTargets := make(map[int]inboundTarget, len(candidates))
 	for _, candidate := range candidates {
-		inboundTags[candidate.InboundId] = candidate.Tag
+		inboundTargets[candidate.InboundId] = inboundTarget{
+			tag:  candidate.Tag,
+			port: candidate.Port,
+		}
 	}
 	needRestart := false
 	if p != nil {
 		s.xrayApi.Init(p.GetAPIPort())
-		for inboundID, tag := range inboundTags {
-			if err := s.xrayApi.DelInbound(tag); err != nil {
+		for inboundID, target := range inboundTargets {
+			if err := s.xrayApi.DelInbound(target.tag); err != nil {
 				logger.Warningf("Error in disabling inbound %d by daily traffic limit: %v", inboundID, err)
 				needRestart = true
 			}
@@ -2281,8 +2312,8 @@ func (s *InboundService) disableDailyLimitInbounds(tx *gorm.DB) (bool, int64, er
 		s.xrayApi.Close()
 	}
 
-	ids := make([]int, 0, len(inboundTags))
-	for id := range inboundTags {
+	ids := make([]int, 0, len(inboundTargets))
+	for id := range inboundTargets {
 		ids = append(ids, id)
 	}
 	result := tx.Model(&model.Inbound{}).Where("id IN ? AND enable = ?", ids, true).Updates(map[string]any{
@@ -2291,6 +2322,19 @@ func (s *InboundService) disableDailyLimitInbounds(tx *gorm.DB) (bool, int64, er
 	})
 	if result.Error != nil {
 		return needRestart, result.RowsAffected, result.Error
+	}
+
+	if p != nil {
+		for inboundID, target := range inboundTargets {
+			if err := terminateInboundTCPConnections(target.port); err != nil {
+				logger.Warningf("Error terminating active TCP connections for daily-limit inbound %d on port %d: %v",
+					inboundID, target.port, err)
+				needRestart = true
+			} else {
+				logger.Debugf("Terminated active TCP connections for daily-limit inbound %d on port %d",
+					inboundID, target.port)
+			}
+		}
 	}
 
 	// A previous manual override is consumed when the next daily threshold is

@@ -3,12 +3,15 @@ package service
 import (
 	"encoding/json"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 
 	"github.com/mhsanaei/3x-ui/v2/database"
 	"github.com/mhsanaei/3x-ui/v2/database/model"
+	xuilogger "github.com/mhsanaei/3x-ui/v2/logger"
 	"github.com/mhsanaei/3x-ui/v2/xray"
+	"github.com/op/go-logging"
 )
 
 func TestDailyClientTrafficThreshold(t *testing.T) {
@@ -100,6 +103,8 @@ func setupDailyTrafficTestDB(t *testing.T) {
 	t.Helper()
 	dbDir := t.TempDir()
 	t.Setenv("XUI_DB_FOLDER", dbDir)
+	t.Setenv("XUI_LOG_FOLDER", dbDir)
+	xuilogger.InitLogger(logging.ERROR)
 	if err := database.InitDB(filepath.Join(dbDir, "x-ui.db")); err != nil {
 		t.Fatalf("database.InitDB failed: %v", err)
 	}
@@ -108,6 +113,38 @@ func setupDailyTrafficTestDB(t *testing.T) {
 			t.Logf("database.CloseDB warning: %v", err)
 		}
 	})
+}
+
+func TestTerminateInboundTCPConnections(t *testing.T) {
+	previous := runSocketCommand
+	t.Cleanup(func() {
+		runSocketCommand = previous
+	})
+
+	var command string
+	var args []string
+	runSocketCommand = func(name string, commandArgs ...string) ([]byte, error) {
+		command = name
+		args = append([]string(nil), commandArgs...)
+		return nil, nil
+	}
+
+	if err := terminateInboundTCPConnections(23456); err != nil {
+		t.Fatalf("terminateInboundTCPConnections failed: %v", err)
+	}
+	if command != "ss" {
+		t.Fatalf("command = %q, want ss", command)
+	}
+	wantArgs := []string{"-K", "state", "established", "sport = :23456"}
+	if !reflect.DeepEqual(args, wantArgs) {
+		t.Fatalf("args = %#v, want %#v", args, wantArgs)
+	}
+}
+
+func TestTerminateInboundTCPConnectionsRejectsInvalidPort(t *testing.T) {
+	if err := terminateInboundTCPConnections(0); err == nil {
+		t.Fatal("invalid port should be rejected")
+	}
 }
 
 func TestDisableInvalidClientsByDailyTrafficLimit(t *testing.T) {
@@ -147,15 +184,15 @@ func TestDisableInvalidClientsByDailyTrafficLimit(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	needRestart, count, err := (&InboundService{}).disableDailyLimitInbounds(database.GetDB())
+	needRestart, globalRestart, err := (&InboundService{}).AddTraffic(nil, nil)
 	if err != nil {
-		t.Fatalf("disableDailyLimitInbounds failed: %v", err)
+		t.Fatalf("AddTraffic failed: %v", err)
 	}
 	if needRestart {
 		t.Fatal("no Xray API restart should be required in the database-only test")
 	}
-	if count != 1 {
-		t.Fatalf("disabled client count = %d, want 1", count)
+	if globalRestart {
+		t.Fatal("a successful daily-limit disable must not request a global Xray restart")
 	}
 
 	var traffic xray.ClientTraffic
