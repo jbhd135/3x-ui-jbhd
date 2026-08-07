@@ -6,6 +6,13 @@
     </a-form-item>
     <a-form-item label='{{ i18n "remark" }}'>
         <a-input v-model.trim="dbInbound.remark"></a-input>
+        <div class="inbound-remark-shortcuts">
+            <a-button v-for="months in [1, 3, 6, 12]" :key="months" size="small"
+                :type="isInboundRemarkPreset(months) ? 'primary' : 'default'"
+                @click="setInboundRemarkMonths(months)">
+                [[ months ]]个月
+            </a-button>
+        </div>
     </a-form-item>
 
     <a-form-item label='{{ i18n "protocol" }}'>

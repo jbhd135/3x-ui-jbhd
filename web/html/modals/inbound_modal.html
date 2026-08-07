@@ -34,6 +34,13 @@
         flex: 0 0 auto;
     }
 
+    #inbound-modal .inbound-remark-shortcuts {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin-top: 8px;
+    }
+
     @media (max-width: 768px) {
         #inbound-modal .inbound-modal-titlebar {
             padding-right: 38px;
@@ -338,6 +345,20 @@
             setInboundExpiry(amount, unit) {
                 this.dbInbound._expiryTime = moment().add(amount, unit);
                 this.confirmInboundExpiryPicker();
+            },
+            inboundRemarkForMonths(months) {
+                const now = moment();
+                const target = now.clone().add(months, "months");
+                return target.year() === now.year() ?
+                    target.format("MMDD") :
+                    target.format("YYYYMMDD");
+            },
+            setInboundRemarkMonths(months) {
+                this.dbInbound.remark = this.inboundRemarkForMonths(months);
+            },
+            isInboundRemarkPreset(months) {
+                return `${this.dbInbound.remark || ""}`.trim() ===
+                    this.inboundRemarkForMonths(months);
             },
             confirmInboundExpiryPicker() {
                 this.$nextTick(() => {
