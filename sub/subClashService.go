@@ -330,17 +330,40 @@ func (s *SubClashService) buildHysteriaProxy(inbound *model.Inbound, client mode
 func (s *SubClashService) applyTransport(proxy map[string]any, network string, stream map[string]any) bool {
 	switch network {
 	case "", "tcp":
-		proxy["network"] = "tcp"
 		tcp, _ := stream["tcpSettings"].(map[string]any)
 		if tcp != nil {
 			header, _ := tcp["header"].(map[string]any)
 			if header != nil {
 				typeStr, _ := header["type"].(string)
-				if typeStr != "" && typeStr != "none" {
+				switch typeStr {
+				case "", "none":
+					// Raw TCP does not need transport options.
+				case "http":
+					proxy["network"] = "http"
+					if request, ok := header["request"].(map[string]any); ok {
+						httpOpts := make(map[string]any)
+						if method, ok := request["method"].(string); ok && method != "" {
+							httpOpts["method"] = method
+						}
+						if paths, ok := request["path"].([]any); ok && len(paths) > 0 {
+							httpOpts["path"] = paths
+						} else if path, ok := request["path"].(string); ok && path != "" {
+							httpOpts["path"] = []string{path}
+						}
+						if headers, ok := request["headers"].(map[string]any); ok && len(headers) > 0 {
+							httpOpts["headers"] = headers
+						}
+						if len(httpOpts) > 0 {
+							proxy["http-opts"] = httpOpts
+						}
+					}
+					return true
+				default:
 					return false
 				}
 			}
 		}
+		proxy["network"] = "tcp"
 		return true
 	case "ws":
 		proxy["network"] = "ws"

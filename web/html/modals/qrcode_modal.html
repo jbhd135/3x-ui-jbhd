@@ -38,6 +38,14 @@
           </tr-qr-bg-inner>
         </tr-qr-bg>
       </tr-qr-box>
+      <tr-qr-box class="qr-box" v-if="app.subSettings.subClashEnable">
+        <a-tag color="purple" class="qr-tag"><span>Clash / Mihomo</span></a-tag>
+        <tr-qr-bg class="qr-bg-sub">
+          <tr-qr-bg-inner class="qr-bg-sub-inner">
+            <canvas @click="copy(genSubClashLink(qrModal.client.subId))" id="qrCode-subClash" class="qr-cv"></canvas>
+          </tr-qr-bg-inner>
+        </tr-qr-bg>
+      </tr-qr-box>
     </template>
     <template v-for="(row, index) in qrModal.qrcodes">
       <tr-qr-box class="qr-box">
@@ -241,6 +249,9 @@
       genSubJsonLink(subID) {
         return app.subSettings.subJsonURI + subID;
       },
+      genSubClashLink(subID) {
+        return app.subSettings.subClashURI + subID;
+      },
       revertOverflow() {
         const elements = document.querySelectorAll(".qr-tag");
         elements.forEach((element) => {
@@ -269,6 +280,9 @@
         this.setQrCode("qrCode-sub", this.genSubLink(qrModal.subId));
         if (app.subSettings.subJsonEnable) {
           this.setQrCode("qrCode-subJson", this.genSubJsonLink(qrModal.subId));
+        }
+        if (app.subSettings.subClashEnable) {
+          this.setQrCode("qrCode-subClash", this.genSubClashLink(qrModal.subId));
         }
       }
       qrModal.qrcodes.forEach((element, index) => {
