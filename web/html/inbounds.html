@@ -110,6 +110,10 @@
                           {{ i18n "pages.inbounds.export" }} - {{ i18n
                           "pages.settings.subSettings" }}
                         </a-menu-item>
+                        <a-menu-item key="clashSubs" v-if="subSettings.subClashEnable">
+                          <a-icon type="copy"></a-icon>
+                          Clash / Mihomo 订阅链接
+                        </a-menu-item>
                         <a-menu-item key="resetInbounds">
                           <a-icon type="reload"></a-icon>
                           {{ i18n "pages.inbounds.resetAllTraffic" }}
@@ -224,6 +228,10 @@
                               <a-icon type="export"></a-icon>
                               {{ i18n "pages.inbounds.export"}} - {{ i18n
                               "pages.settings.subSettings" }}
+                            </a-menu-item>
+                            <a-menu-item key="clashSubs" v-if="subSettings.subClashEnable">
+                              <a-icon type="copy"></a-icon>
+                              Clash / Mihomo 订阅链接
                             </a-menu-item>
                             <a-menu-item key="delDepletedClients" :style="{ color: '#FF4D4F' }">
                               <a-icon type="rest"></a-icon>
@@ -1543,6 +1551,8 @@
         subURI: '',
         subJsonURI: '',
         subJsonEnable: false,
+        subClashURI: '',
+        subClashEnable: false,
       },
       remarkModel: '-ieo',
       datepicker: 'gregorian',
@@ -1635,6 +1645,8 @@
           subURI: settings.subURI,
           subJsonURI: settings.subJsonURI,
           subJsonEnable: settings.subJsonEnable,
+          subClashURI: settings.subClashURI,
+          subClashEnable: settings.subClashEnable,
         };
         this.pageSize = settings.pageSize;
         this.remarkModel = settings.remarkModel;
@@ -2104,6 +2116,9 @@
           case "subs":
             this.exportAllSubs();
             break;
+          case "clashSubs":
+            this.exportAllClashSubs();
+            break;
           case "resetInbounds":
             this.resetAllTraffic();
             break;
@@ -2140,6 +2155,9 @@
             break;
           case "subs":
             this.exportSubs(dbInbound.id);
+            break;
+          case "clashSubs":
+            this.exportClashSubs(dbInbound.id);
             break;
           case "clipboard":
             this.copy(dbInbound.id);
@@ -3228,6 +3246,22 @@
           [...new Set(subLinks)].join('\n'),
           dbInbound.remark + "-Subs");
       },
+      exportClashSubs(dbInboundId) {
+        const dbInbound = this.dbInbounds.find(row => row.id === dbInboundId);
+        const clients = this.getInboundClients(dbInbound);
+        const subLinks = [];
+        if (clients != null) {
+          clients.forEach(c => {
+            if (c.subId && c.subId.length > 0) {
+              subLinks.push(this.subSettings.subClashURI + c.subId);
+            }
+          });
+        }
+        txtModal.show(
+          'Clash / Mihomo 订阅链接',
+          [...new Set(subLinks)].join('\n'),
+          dbInbound.remark + '-Clash-Subs');
+      },
       importInbound() {
         promptModal.open({
           title: '{{ i18n "pages.inbounds.importInbound" }}',
@@ -3257,6 +3291,23 @@
           '{{ i18n "pages.inbounds.export"}} - {{ i18n "pages.settings.subSettings" }}',
           [...new Set(subLinks)].join('\r\n'),
           'All-Inbounds-Subs');
+      },
+      exportAllClashSubs() {
+        const subLinks = [];
+        for (const dbInbound of this.dbInbounds) {
+          const clients = this.getInboundClients(dbInbound);
+          if (clients != null) {
+            clients.forEach(c => {
+              if (c.subId && c.subId.length > 0) {
+                subLinks.push(this.subSettings.subClashURI + c.subId);
+              }
+            });
+          }
+        }
+        txtModal.show(
+          'Clash / Mihomo 订阅链接',
+          [...new Set(subLinks)].join('\r\n'),
+          'All-Inbounds-Clash-Subs');
       },
       exportAllLinks() {
         let copyText = [];
