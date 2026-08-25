@@ -41,6 +41,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/jbhd135/3x-ui-jbhd/main/scri
 说明：
 
 - 该脚本固定从 `jbhd135/3x-ui-jbhd` 的最新 GitHub Release 下载对应架构安装包。
+- 安装和升级默认启用 IPv4-only，持久禁用服务器 IPv6，避免代理出口因 IPv6 地区识别变化而异常；只有明确传入 `--enable-ipv6` 才会保留 IPv6。
 - 自动迁移会先执行无人值守安装，再用 Google Drive 最新恢复点覆盖数据库和证书。
 - 如果服务器上没有现成数据库，脚本会进入配置流程；直接回车会使用安全随机账号、密码、端口，路径默认 `/jbhd/`。
 - 如果服务器上已有 `/etc/x-ui/x-ui.db`，脚本会询问是否重新配置面板；如需跳过询问并强制重新设置，可附加 `--configure`。

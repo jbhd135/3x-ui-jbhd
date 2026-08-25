@@ -8,6 +8,7 @@ ASSUME_YES="false"
 SKIP_START="false"
 NO_CONFIG_PROMPT="false"
 FORCE_CONFIG="false"
+DISABLE_IPV6="${XUI_DISABLE_IPV6:-true}"
 PANEL_USERNAME="${PANEL_USERNAME:-}"
 PANEL_PASSWORD="${PANEL_PASSWORD:-}"
 PANEL_PORT="${PANEL_PORT:-}"
@@ -41,6 +42,7 @@ Optional:
                     Do not ask panel setting questions; use provided values or secure defaults
   --yes             Skip installation confirmation prompt
   --skip-start      Install files but do not start x-ui
+  --enable-ipv6     Explicitly keep IPv6 enabled. IPv6 is disabled by default
   --help            Show this help text
 
 Environment variables:
@@ -52,6 +54,7 @@ Environment variables:
   PANEL_WEB_BASE_PATH
                     Same as --web-base-path
   PANEL_PUBLIC_HOST Hostname or IP to show in the final browser login URL
+  XUI_DISABLE_IPV6  Disable IPv6 when true (default: true)
 EOF
 }
 
@@ -131,6 +134,40 @@ install_base() {
       apt-get install -y -q curl tar ca-certificates openssl
       ;;
   esac
+}
+
+configure_ipv4_only() {
+  local config_file="/etc/sysctl.d/99-xui-ipv4-only.conf"
+  local global_ipv6_count="0"
+
+  if [[ "$DISABLE_IPV6" != "true" ]]; then
+    log "IPv6 remains enabled by explicit request"
+    return 0
+  fi
+
+  require_cmd sysctl
+  install -d -m 0755 /etc/sysctl.d
+  cat >"$config_file" <<'EOF'
+# Managed by the jbhd 3x-ui installer. Keep panel and proxy egress on IPv4.
+net.ipv6.conf.all.disable_ipv6 = 1
+net.ipv6.conf.default.disable_ipv6 = 1
+net.ipv6.conf.lo.disable_ipv6 = 1
+EOF
+  chmod 0644 "$config_file"
+  sysctl -q -p "$config_file"
+
+  [[ "$(sysctl -n net.ipv6.conf.all.disable_ipv6)" == "1" ]] \
+    || die "Failed to disable IPv6"
+  [[ "$(sysctl -n net.ipv6.conf.default.disable_ipv6)" == "1" ]] \
+    || die "Failed to disable IPv6 for new interfaces"
+
+  if command -v ip >/dev/null 2>&1; then
+    global_ipv6_count="$(ip -6 -o addr show scope global | wc -l | tr -d '[:space:]')"
+    [[ "$global_ipv6_count" == "0" ]] \
+      || die "Global IPv6 addresses remain after applying IPv4-only mode"
+  fi
+
+  log "IPv4-only mode enabled and verified"
 }
 
 resolve_tag() {
@@ -395,6 +432,7 @@ EnvironmentFile=-$XUI_ENV_FILE
 Environment="XRAY_VMESS_AEAD_FORCED=false"
 Type=simple
 WorkingDirectory=$XUI_MAIN_FOLDER/
+ExecStartPre=/bin/sh -c 'test ! -r /etc/sysctl.d/99-xui-ipv4-only.conf || sysctl -q -p /etc/sysctl.d/99-xui-ipv4-only.conf'
 ExecStart=$XUI_MAIN_FOLDER/x-ui
 ExecReload=kill -USR1 \$MAINPID
 Restart=on-failure
@@ -482,6 +520,8 @@ while [[ $# -gt 0 ]]; do
       ASSUME_YES="true"; shift ;;
     --skip-start)
       SKIP_START="true"; shift ;;
+    --enable-ipv6)
+      DISABLE_IPV6="false"; shift ;;
     --help|-h)
       usage; exit 0 ;;
     *)
@@ -491,6 +531,12 @@ done
 
 [[ $EUID -eq 0 ]] || die "Please run this script as root"
 [[ "$GITHUB_REPO" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || die "Invalid GitHub repository: $GITHUB_REPO"
+
+case "${DISABLE_IPV6,,}" in
+  true|1|yes) DISABLE_IPV6="true" ;;
+  false|0|no) DISABLE_IPV6="false" ;;
+  *) die "XUI_DISABLE_IPV6 must be true or false" ;;
+esac
 
 require_cmd curl
 require_cmd tar
@@ -556,9 +602,14 @@ fi
 if [[ -f "$XUI_ENV_FILE" ]]; then
   cp -a "$XUI_ENV_FILE" "$BACKUP_DIR/" >/dev/null 2>&1 || true
 fi
+if [[ -f /etc/sysctl.d/99-xui-ipv4-only.conf ]]; then
+  cp -a /etc/sysctl.d/99-xui-ipv4-only.conf "$BACKUP_DIR/" >/dev/null 2>&1 || true
+fi
 
 log "Stopping old x-ui service"
 systemctl stop x-ui >/dev/null 2>&1 || true
+
+configure_ipv4_only
 
 log "Installing files"
 rm -rf "$XUI_MAIN_FOLDER"
