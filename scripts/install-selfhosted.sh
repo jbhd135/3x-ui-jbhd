@@ -23,6 +23,10 @@ XUI_DB_FOLDER="${XUI_DB_FOLDER:-/etc/x-ui}"
 XUI_LOG_FOLDER="${XUI_LOG_FOLDER:-/var/log/x-ui}"
 XUI_ENV_FILE="${XUI_ENV_FILE:-/etc/default/x-ui}"
 XUI_CLI_BIN="${XUI_CLI_BIN:-/usr/bin/x-ui}"
+IPV4_ONLY_CONFIG="${IPV4_ONLY_CONFIG:-/etc/sysctl.d/99-xui-ipv4-only.conf}"
+IPV4_ONLY_HELPER="${IPV4_ONLY_HELPER:-/usr/local/sbin/xui-disable-ipv6}"
+IPV4_ONLY_SERVICE="${IPV4_ONLY_SERVICE:-/etc/systemd/system/xui-ipv4-only.service}"
+IPV4_ONLY_TIMER="${IPV4_ONLY_TIMER:-/etc/systemd/system/xui-ipv4-only.timer}"
 
 usage() {
   cat <<'EOF'
@@ -137,29 +141,83 @@ install_base() {
 }
 
 configure_ipv4_only() {
-  local config_file="/etc/sysctl.d/99-xui-ipv4-only.conf"
+  local flag
   local global_ipv6_count="0"
 
   if [[ "$DISABLE_IPV6" != "true" ]]; then
+    rm -f "$IPV4_ONLY_CONFIG"
+    systemctl disable --now xui-ipv4-only.timer >/dev/null 2>&1 || true
     log "IPv6 remains enabled by explicit request"
     return 0
   fi
 
   require_cmd sysctl
-  install -d -m 0755 /etc/sysctl.d
-  cat >"$config_file" <<'EOF'
+  install -d -m 0755 /etc/sysctl.d /usr/local/sbin /etc/systemd/system
+  cat >"$IPV4_ONLY_CONFIG" <<'EOF'
 # Managed by the jbhd 3x-ui installer. Keep panel and proxy egress on IPv4.
 net.ipv6.conf.all.disable_ipv6 = 1
 net.ipv6.conf.default.disable_ipv6 = 1
 net.ipv6.conf.lo.disable_ipv6 = 1
 EOF
-  chmod 0644 "$config_file"
-  sysctl -q -p "$config_file"
+  chmod 0644 "$IPV4_ONLY_CONFIG"
+
+  cat >"$IPV4_ONLY_HELPER" <<'EOF'
+#!/bin/sh
+set -eu
+
+config_file="/etc/sysctl.d/99-xui-ipv4-only.conf"
+[ -r "$config_file" ] || exit 0
+
+sysctl -q -p "$config_file"
+for flag in /proc/sys/net/ipv6/conf/*/disable_ipv6; do
+  [ -w "$flag" ] || continue
+  printf '1\n' >"$flag"
+done
+
+if command -v ip >/dev/null 2>&1; then
+  ip -6 addr flush scope global >/dev/null 2>&1 || true
+fi
+EOF
+  chmod 0755 "$IPV4_ONLY_HELPER"
+
+  cat >"$IPV4_ONLY_SERVICE" <<EOF
+[Unit]
+Description=Enforce IPv4-only networking for x-ui
+After=network-online.target systemd-sysctl.service
+Wants=network-online.target
+Before=x-ui.service
+
+[Service]
+Type=oneshot
+ExecStart=$IPV4_ONLY_HELPER
+EOF
+
+  cat >"$IPV4_ONLY_TIMER" <<'EOF'
+[Unit]
+Description=Periodically verify x-ui IPv4-only networking
+
+[Timer]
+OnBootSec=20s
+OnUnitActiveSec=1min
+AccuracySec=5s
+Unit=xui-ipv4-only.service
+
+[Install]
+WantedBy=timers.target
+EOF
+
+  systemctl daemon-reload
+  systemctl enable --now xui-ipv4-only.timer >/dev/null 2>&1 || true
+  "$IPV4_ONLY_HELPER"
 
   [[ "$(sysctl -n net.ipv6.conf.all.disable_ipv6)" == "1" ]] \
     || die "Failed to disable IPv6"
   [[ "$(sysctl -n net.ipv6.conf.default.disable_ipv6)" == "1" ]] \
     || die "Failed to disable IPv6 for new interfaces"
+  for flag in /proc/sys/net/ipv6/conf/*/disable_ipv6; do
+    [[ "$(cat "$flag")" == "1" ]] \
+      || die "Failed to disable IPv6 for interface $(basename "$(dirname "$flag")")"
+  done
 
   if command -v ip >/dev/null 2>&1; then
     global_ipv6_count="$(ip -6 -o addr show scope global | wc -l | tr -d '[:space:]')"
@@ -421,18 +479,29 @@ print_install_summary() {
 }
 
 generate_service_file() {
+  local ipv4_unit_after=""
+  local ipv4_unit_requires=""
+  local ipv4_exec_start_pre=""
+
+  if [[ "$DISABLE_IPV6" == "true" ]]; then
+    ipv4_unit_after=" xui-ipv4-only.service"
+    ipv4_unit_requires="Requires=xui-ipv4-only.service"
+    ipv4_exec_start_pre="ExecStartPre=$IPV4_ONLY_HELPER"
+  fi
+
   cat >"$1" <<EOF
 [Unit]
 Description=x-ui Service
-After=network.target
+After=network.target${ipv4_unit_after}
 Wants=network.target
+${ipv4_unit_requires}
 
 [Service]
 EnvironmentFile=-$XUI_ENV_FILE
 Environment="XRAY_VMESS_AEAD_FORCED=false"
 Type=simple
 WorkingDirectory=$XUI_MAIN_FOLDER/
-ExecStartPre=/bin/sh -c 'test ! -r /etc/sysctl.d/99-xui-ipv4-only.conf || sysctl -q -p /etc/sysctl.d/99-xui-ipv4-only.conf'
+${ipv4_exec_start_pre}
 ExecStart=$XUI_MAIN_FOLDER/x-ui
 ExecReload=kill -USR1 \$MAINPID
 Restart=on-failure
@@ -605,6 +674,11 @@ fi
 if [[ -f /etc/sysctl.d/99-xui-ipv4-only.conf ]]; then
   cp -a /etc/sysctl.d/99-xui-ipv4-only.conf "$BACKUP_DIR/" >/dev/null 2>&1 || true
 fi
+for path in "$IPV4_ONLY_HELPER" "$IPV4_ONLY_SERVICE" "$IPV4_ONLY_TIMER"; do
+  if [[ -f "$path" ]]; then
+    cp -a "$path" "$BACKUP_DIR/" >/dev/null 2>&1 || true
+  fi
+done
 
 log "Stopping old x-ui service"
 systemctl stop x-ui >/dev/null 2>&1 || true
